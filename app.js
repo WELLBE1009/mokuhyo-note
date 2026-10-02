@@ -33,7 +33,7 @@ const activeGoals = p => (p?.sheet?.goals||[]).map((g,i)=>({...g,i})).filter(g=>
 /* ---------- 状態 ---------- */
 const me = { email:'', name:'', admin:false, signedIn:false };
 const state = { people:[], records:{}, terms:{}, ready:false };
-const ui = { pid: ls.get('mn.pid') || null, tab: 'record', dirty:false, draft:null, draftKey:'', addOpen:false };
+const ui = { pid: ls.get('mn.pid') || null, tab: 'record', dirty:false, draft:null, draftKey:'', addOpen:false, edit:null };
 let api = null;   // 下の firebaseApi() か demoApi()
 
 function person(){ return state.people.find(p=>p.id===ui.pid) || null; }
@@ -49,7 +49,9 @@ function roleOf(p){ if(!p) return ''; if(p.ownerEmail===me.email) return '本人
 const canConfirm = p => roleOf(p)!=='本人';
 // 一覧の印：その人の役割ではなく「あなたとの関係」。管理者として見えているだけの人には付けない
 const relationBadge = p => { const r=roleOf(p); return r==='本人'? '<span class="role">あなたのノート</span>' : r==='コーチ'? '<span class="role">あなたが担当</span>' : ''; };
-const canDeleteRecord = () => me.admin;  // 記録の削除は管理者だけ（firestore.rules と同じ）
+const canDeleteRecord = () => me.admin;
+// 記録の訂正は本人（と管理者）。元の内容は edits に残る
+const canEditRecord = p => roleOf(p)==='本人' || me.admin;  // 記録の削除は管理者だけ（firestore.rules と同じ）
 
 function showNotice(m){ const n=$('#notice'); n.textContent=m; n.hidden=!m; }
 async function saveSafe(fn, ok){
@@ -196,7 +198,7 @@ function onData(){
   api.watchRecords(ui.pid);
   syncSummary(person());
   renderPeople();
-  if(ui.dirty && ['record','sheet','review'].includes(ui.tab) && ui.pid){ renderChainOnly(); return; }
+  if(ui.pid && (ui.edit || (ui.dirty && ['record','sheet','review'].includes(ui.tab)))){ renderChainOnly(); return; }
   render();
 }
 
@@ -257,7 +259,7 @@ function renderPeople(){
 }
 function go(pid){
   if(ui.dirty && !leaveOk()) return;
-  ui.pid=pid||null; ui.dirty=false; ui.draft=null; ui.draftKey=''; ls.set('mn.pid',ui.pid||'');
+  ui.pid=pid||null; ui.dirty=false; ui.draft=null; ui.draftKey=''; ui.edit=null; ls.set('mn.pid',ui.pid||'');
   if(ui.pid){ ui.tab = activeGoals(person()).length? 'record' : 'sheet'; }
   renderPeople(); render(); window.scrollTo({top:0});
 }
@@ -468,6 +470,8 @@ function flowView(p){
   const coach=canConfirm(p);
   const items=[...recs].reverse().map(r=>{
     const voice=(r.check||[]).map((c,i)=>c==='fix'?`目標${i+1}：言葉を直したい`:c==='change'?`目標${i+1}：変えたい`:'').filter(Boolean);
+    if(ui.edit && ui.edit.rid===r.id) return editRecordForm(r, goals);
+    const edits=r.edits||[];
     return `<div class="tl-item">
       <div class="tl-date">${ymd(r.date)}</div>
       <div class="tl-body">
@@ -477,12 +481,14 @@ function flowView(p){
         ${r.stuck?`<div class="kv"><b>詰まり</b>${nl(r.stuck)}</div>`:''}
         ${r.next?`<div class="kv"><b>次の一歩</b>${nl(r.next)}</div>`:''}
         ${r.checkNote?`<div class="kv"><b>引っかかり</b>${nl(r.checkNote)}</div>`:''}
+        ${edits.length?`<details class="small"><summary class="muted" style="cursor:pointer">訂正あり（${edits.length}回）・元の記録を見る</summary><div class="hist" style="margin-top:6px">${edits.map(e=>`<div><span class="num">${ymd(e.at)}</span> ${esc(e.by||'')} が訂正${e.why?`（${esc(e.why)}）`:''}。訂正前：${esc(ymd(e.before?.date))}／${goals.map(g=>`目標${g.i+1} ${esc(e.before?.values?.[g.i]??'—')}`).join('・')}${e.before?.fact?`／事実「${esc(e.before.fact)}」`:''}${e.before?.stuck?`／詰まり「${esc(e.before.stuck)}」`:''}${e.before?.next?`／次の一歩「${esc(e.before.next)}」`:''}</div>`).join('')}</div></details>`:''}
         ${r.coachNote?`<div class="coachnote"><b>${esc(r.coachNoteBy||'コーチ')}から</b>${nl(r.coachNote)}</div>`:''}
         ${coach && !r.coachNote?`<div class="inline-form"><textarea id="cn-${esc(r.id)}" placeholder="ひとこと返す（任意）。評価ではなく、問いかけや気づいたことを"></textarea><button class="btn" data-act="coach-note" data-id="${esc(r.id)}">返す</button></div>`:''}
         <div class="confirm-inline small">
           ${r.confirmedAt? `<span class="pill ok">${md(r.confirmedAt)} ${esc(r.confirmedBy||'')} 確認済み</span>` : coach? `<button class="btn" data-act="confirm" data-id="${esc(r.id)}">確認した</button>` : '<span class="muted">コーチの確認待ち</span>'}
           ${voice.length && !r.voiceDone && coach?`<button class="btn" data-act="voice-done" data-id="${esc(r.id)}">見直しについて話した</button>`:''}
           ${voice.length && r.voiceDone?'<span class="pill plain">見直しについて話した</span>':''}
+          ${canEditRecord(p)?`<button class="btn ghost" data-act="edit-record" data-id="${esc(r.id)}">訂正する</button>`:''}
           ${canDeleteRecord(p)?`<button class="btn ghost" data-act="del-record" data-id="${esc(r.id)}">削除</button>`:''}
         </div>
       </div></div>`;}).join('');
@@ -655,6 +661,23 @@ function reviewView(p){
   </div>`;
 }
 
+/* ---- 記録の訂正フォーム ---- */
+function editRecordForm(r, goals){
+  const e=ui.edit;
+  return `<div class="tl-item"><div class="tl-date">訂正中</div><div class="tl-body goalbox">
+    <p class="small muted">直した内容で上書きされますが、訂正前の内容と、いつ誰が直したかは「訂正あり」として残ります。</p>
+    <label class="f" style="max-width:220px">記録日<input type="date" id="ed-date" data-e="date" value="${esc(e.date)}"></label>
+    ${goals.map(g=>`<div class="numrow"><div>目標${g.i+1}：${esc(g.metric||'')}</div><input type="number" inputmode="decimal" min="0" step="any" id="ed-v${g.i}" data-e="values.${g.i}" value="${esc(e.values[g.i]??'')}" aria-label="目標${g.i+1}の数値"></div>`).join('')}
+    <label class="f">今週あった事実<textarea id="ed-fact" data-e="fact">${esc(e.fact)}</textarea></label>
+    <div class="grid2">
+      <label class="f">詰まっていること<textarea id="ed-stuck" data-e="stuck">${esc(e.stuck)}</textarea></label>
+      <label class="f">次の一歩<textarea id="ed-next" data-e="next">${esc(e.next)}</textarea></label>
+    </div>
+    <label class="f">何を直したか（任意）<input type="text" id="ed-why" data-e="why" value="${esc(e.why||'')}" placeholder="例：数値を打ち間違えた"></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn ghost" data-act="cancel-edit">やめる</button><button class="btn primary" data-act="save-edit" data-id="${esc(r.id)}">訂正を保存</button></div>
+  </div></div>`;
+}
+
 /* ---- これまでの期（読むだけ） ---- */
 function termsView(p){
   const ts=[...termsOf(p.id)].reverse();
@@ -689,6 +712,7 @@ function setPath(obj, path, val){
   const last=ks.at(-1); o[isNaN(last)?last:Number(last)]=val;
 }
 document.addEventListener('input', e=>{
+  if(e.target.dataset?.e && ui.edit){ setPath(ui.edit, e.target.dataset.e, e.target.value); return; }
   const el=e.target; const path=el.dataset?.d; if(!path||!ui.draft) return;
   setPath(ui.draft, path, el.type==='checkbox'? el.checked : el.value); ui.dirty=true;
   if(el.type==='radio' && (path.startsWith('check.')||path.endsWith('.decision'))){
@@ -722,7 +746,7 @@ document.addEventListener('click', async e=>{
   const t=e.target.closest('[data-go],[data-tab],[data-act],[data-login]'); if(!t) return;
   if(t.dataset.login){ loginMode=t.dataset.login; renderLogin(); return; }
   if(t.dataset.go!==undefined){ go(t.dataset.go); return; }
-  if(t.dataset.tab){ if(ui.dirty && !leaveOk()) return; ui.tab=t.dataset.tab; ui.dirty=false; ui.draft=null; ui.draftKey=''; render(); return; }
+  if(t.dataset.tab){ if(ui.dirty && !leaveOk()) return; ui.edit=null; ui.tab=t.dataset.tab; ui.dirty=false; ui.draft=null; ui.draftKey=''; render(); return; }
   const act=t.dataset.act;
   // ログインまわり
   if(act==='google'){ try{ await api.google(); }catch(err){ const m=authMsg(err); if(m){ const el=$('#lerr'); if(el) el.textContent=m; } } return; }
@@ -789,6 +813,24 @@ document.addEventListener('click', async e=>{
     const name=p.name;
     const ok=await saveSafe(()=>api.deletePerson(p.id),`${name}さんを削除しました`);
     if(ok){ ui.pid=null; ui.dirty=false; ui.draft=null; ui.draftKey=''; ls.set('mn.pid',''); render(); renderPeople(); window.scrollTo({top:0}); } else t.disabled=false;
+    return;
+  }
+  if(act==='edit-record'){
+    if(ui.dirty && !leaveOk()) return;
+    const r=allRecordsOf(p.id).find(x=>x.id===t.dataset.id); if(!r) return;
+    ui.edit={rid:r.id, date:r.date||'', values:[0,1,2].map(i=>r.values?.[i]??''), fact:r.fact||'', stuck:r.stuck||'', next:r.next||'', why:''};
+    render(); document.getElementById('ed-date')?.focus(); return;
+  }
+  if(act==='cancel-edit'){ ui.edit=null; render(); return; }
+  if(act==='save-edit'){
+    const r=allRecordsOf(p.id).find(x=>x.id===t.dataset.id); const e=ui.edit; if(!r||!e) return;
+    const after={date:e.date||r.date, values:e.values.map(v=>v===''?0:Number(v)), fact:e.fact.trim(), stuck:e.stuck.trim(), next:e.next.trim()};
+    const before={date:r.date||'', values:r.values||[], fact:r.fact||'', stuck:r.stuck||'', next:r.next||''};
+    if(JSON.stringify(after)===JSON.stringify({...before,values:[0,1,2].map(i=>Number(before.values[i]??0))})){ toast('変わったところがありません'); return; }
+    t.disabled=true; const now=new Date().toISOString();
+    const edits=[...(r.edits||[]), {at:now, by:me.name, why:(e.why||'').trim(), before}];
+    const ok=await saveSafe(()=>api.updateRecord(p.id,r.id,{...after, edits, editedAt:now, editedBy:me.name}),'訂正しました（元の記録も残っています）');
+    if(ok){ ui.edit=null; render(); } else t.disabled=false;
     return;
   }
   if(act==='confirm'){ await saveSafe(()=>api.updateRecord(p.id,t.dataset.id,{confirmedAt:new Date().toISOString(),confirmedBy:me.name}),'確認しました'); return; }
