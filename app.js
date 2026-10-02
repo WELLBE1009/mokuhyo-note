@@ -32,12 +32,19 @@ const activeGoals = p => (p?.sheet?.goals||[]).map((g,i)=>({...g,i})).filter(g=>
 
 /* ---------- 状態 ---------- */
 const me = { email:'', name:'', admin:false, signedIn:false };
-const state = { people:[], records:{}, ready:false };
+const state = { people:[], records:{}, terms:{}, ready:false };
 const ui = { pid: ls.get('mn.pid') || null, tab: 'record', dirty:false, draft:null, draftKey:'', addOpen:false };
 let api = null;   // 下の firebaseApi() か demoApi()
 
 function person(){ return state.people.find(p=>p.id===ui.pid) || null; }
-function recordsOf(pid){ return [...(state.records[pid]||[])].sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||'')); }
+const byDate = (a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||'');
+function allRecordsOf(pid){ return [...(state.records[pid]||[])].sort(byDate); }
+// いまの期の記録だけ（前の期を締めた時刻より後に書いたもの）
+const tms = v => Date.parse(v||'')||0;  // 時刻の比較はタイムゾーン表記に左右されないよう数値で
+function recordsOf(pid){ const p=state.people.find(x=>x.id===pid); const st=p?.termStartAt; return allRecordsOf(pid).filter(r=>!st || tms(r.createdAt)>=tms(st)); }
+function termsOf(pid){ return [...(state.terms[pid]||[])].sort((a,b)=>(a.closedAt||'').localeCompare(b.closedAt||'')); }
+// 期ごとの数値の合計（目標1〜3）
+const goalTotals = recs => [0,1,2].map(i=>recs.reduce((a,r)=>a+(Number(r.values?.[i])||0),0));
 function roleOf(p){ if(!p) return ''; if(p.ownerEmail===me.email) return '本人'; if((p.coachEmails||[]).includes(me.email)) return 'コーチ'; return me.admin? '管理者' : ''; }
 const canConfirm = p => roleOf(p)!=='本人';
 // 一覧の印：その人の役割ではなく「あなたとの関係」。管理者として見えているだけの人には付けない
@@ -95,9 +102,27 @@ async function firebaseApi(cfg){
     demo:false,
     // 記録は「いま開いている人」の分だけ読む（無料枠の読み取り回数を節約）
     watchRecords(pid){
-      recUnsubs.forEach((u,id)=>{ if(id!==pid){ u(); recUnsubs.delete(id); delete state.records[id]; } });
+      recUnsubs.forEach((u,id)=>{ if(id!==pid){ u(); recUnsubs.delete(id); delete state.records[id]; delete state.terms[id]; } });
       if(!pid || recUnsubs.has(pid)) return;
-      recUnsubs.set(pid, F.onSnapshot(F.collection(db,'people',pid,'records'), s=>{ state.records[pid]=s.docs.map(d=>({id:d.id,...d.data()})); onData(); }, e=>console.warn('records',e)));
+      const u1=F.onSnapshot(F.collection(db,'people',pid,'records'), s=>{ state.records[pid]=s.docs.map(d=>({id:d.id,...d.data()})); onData(); }, e=>console.warn('records',e));
+      const u2=F.onSnapshot(F.collection(db,'people',pid,'terms'), s=>{ state.terms[pid]=s.docs.map(d=>({id:d.id,...d.data()})); onData(); }, e=>console.warn('terms',e));
+      recUnsubs.set(pid, ()=>{ u1(); u2(); });
+    },
+    // 期を締める：その期のシートと振り返りを terms に保管してから、次の期の形に person を更新
+    async closeTerm(pid, term, next){
+      await F.addDoc(F.collection(db,'people',pid,'terms'), term);
+      await F.updateDoc(F.doc(db,'people',pid), next);
+    },
+    // 管理者用：全員分を1つにまとめて返す（バックアップ）
+    async exportAll(){
+      const out={exportedAt:new Date().toISOString(), project:cfg.projectId, people:[]};
+      const ps=await F.getDocs(F.collection(db,'people'));
+      for(const d of ps.docs){
+        const r=await F.getDocs(F.collection(db,'people',d.id,'records'));
+        const t=await F.getDocs(F.collection(db,'people',d.id,'terms'));
+        out.people.push({id:d.id, ...d.data(), records:r.docs.map(x=>({id:x.id,...x.data()})), terms:t.docs.map(x=>({id:x.id,...x.data()}))});
+      }
+      return out;
     },
     async google(){ const p=new AU.GoogleAuthProvider(); p.setCustomParameters({prompt:'select_account'});
       try{ await AU.signInWithPopup(auth,p); }catch(e){ if(e.code==='auth/popup-blocked'||e.code==='auth/operation-not-supported-in-this-environment') await AU.signInWithRedirect(auth,p); else throw e; } },
@@ -116,7 +141,9 @@ async function firebaseApi(cfg){
     async deletePerson(pid){
       const snap=await F.getDocs(F.collection(db,'people',pid,'records'));
       for(const d of snap.docs) await F.deleteDoc(d.ref);
-      recUnsubs.get(pid)?.(); recUnsubs.delete(pid); delete state.records[pid];
+      const ts=await F.getDocs(F.collection(db,'people',pid,'terms'));
+      for(const d of ts.docs) await F.deleteDoc(d.ref);
+      recUnsubs.get(pid)?.(); recUnsubs.delete(pid); delete state.records[pid]; delete state.terms[pid];
       await F.deleteDoc(F.doc(db,'people',pid));
     },
   };
@@ -140,6 +167,8 @@ function demoApi(){
   return {
     demo:true,
     watchRecords(){},
+    async closeTerm(pid,term,next){ (state.terms[pid] ||= []).push({id:id(),...term}); state.people=state.people.map(p=>p.id===pid?{...p,...next}:p); push(); },
+    async exportAll(){ return {exportedAt:new Date().toISOString(), project:'demo', people:state.people.map(p=>({...p, records:state.records[p.id]||[], terms:state.terms[p.id]||[]}))}; },
     async logout(){ toast('デモ表示ではログアウトはありません'); },
     async addPerson(data){ const n=id(); state.people.push({id:n,...data}); state.records[n]=[]; push(); return n; },
     async updatePerson(pid,data){ state.people=state.people.map(p=>p.id===pid?{...p,...data}:p); push(); },
@@ -290,7 +319,7 @@ function render(){
   main.innerHTML = `<div class="panel">
     <div id="chainbox">${chainView(p)}</div>
     <nav class="tabs" role="tablist">
-      ${[['record','今週の記録'],['flow','記録の流れ'],['sheet','目標設定シート'],['review','振り返り']].map(([k,l])=>`<button class="tab" role="tab" data-tab="${k}" aria-selected="${ui.tab===k}">${l}</button>`).join('')}
+      ${[['record','今週の記録'],['flow','記録の流れ'],['sheet','目標設定シート'],['review','振り返り'],...(termsOf(p.id).length?[['terms','これまでの期']]:[])].map(([k,l])=>`<button class="tab" role="tab" data-tab="${k}" aria-selected="${ui.tab===k}">${l}</button>`).join('')}
     </nav>
     <section id="tabbody" class="panel">${tabView(p)}</section>
   </div>`;
@@ -344,6 +373,7 @@ function teamView(){
       <thead><tr><th>氏名</th><th>コーチ</th><th>最後の記録</th><th>未確認</th><th>目標</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>
     ${addPersonForm()}
+    ${me.admin?`<div class="card"><h3>バックアップ</h3><p class="hint">全員分の目標設定シート・週の記録・振り返り・これまでの期を、1つのファイル（JSON）にして保存します。期末の前や、月に一度を目安に。保存したファイルは個人情報なので、社内の決まった場所に置いてください。</p><div><button class="btn" data-act="export">全データを書き出す</button></div></div>`:''}
   </div>`;
 }
 
@@ -360,7 +390,7 @@ function chainView(p){
     </div>
     <div class="link"><div class="lab">チームミッション</div><div class="val">街にサウナという木を植え、森を育て、人々に元気を届ける${sh.area?` <span class="pill plain">${esc(sh.area)}を担う</span>`:''}</div></div>
     <div class="link"><div class="arrow">↓</div></div>
-    <div class="link"><div class="lab">個人ミッション</div><div class="val mission">${sh.mission?nl(sh.mission):'<span class="empty-val">まだ書いていません</span>'}</div></div>
+    <div class="link"><div class="lab">個人ミッション</div><div class="val"><div class="mission">${sh.mission?nl(sh.mission):'<span class="empty-val">まだ書いていません</span>'}</div>${(()=>{ const prev=termsOf(p.id).at(-1); return prev?.sheet?.mission? `<div class="small muted" style="margin-top:6px">前の期（${esc(prev.label||'')}）のミッション：${esc(prev.sheet.mission)}</div>` : ''; })()}</div></div>
     <div class="link"><div class="arrow">↓</div></div>
     <div class="link"><div class="lab">新しく引き受けること</div><div class="val">${resp?nl(resp):'<span class="empty-val">まだ書いていません</span>'}</div></div>
     <div class="link"><div class="arrow">↓</div></div>
@@ -374,6 +404,7 @@ function tabView(p){
   if(ui.tab==='flow') return flowView(p);
   if(ui.tab==='sheet') return sheetView(p);
   if(ui.tab==='review') return reviewView(p);
+  if(ui.tab==='terms') return termsView(p);
   return '';
 }
 
@@ -615,7 +646,40 @@ function reviewView(p){
     <label class="f">自分がいなくても続く形になったものはあるか<span class="h">T3以上を申告する場合は必須</span>${ta('end.b',d.end.b)}</label>
     <label class="f">達成できなかった目標があれば、その理由<span class="h">達成率を問う欄ではありません</span>${ta('end.c',d.end.c)}</label>
   </div>
-  <div class="savebar"><button class="btn primary" data-act="save-review">振り返りを保存</button></div>`;
+  <div class="savebar"><button class="btn primary" data-act="save-review">振り返りを保存</button></div>
+  <div class="card">
+    <h3>この期を締めて、次の期を始める</h3>
+    <p class="hint">期末の振り返りを書き終えたら押します。この期の目標設定シート・振り返り・週の記録は「これまでの期」に保管され、あとから書き換えられません。次の期は、個人ミッションと1-0〜1-1、責任の範囲の2-1を引き継ぎ、目標と振り返りは白紙から始めます。</p>
+    <p class="small muted">${p.periodStart?`この期：${ymd(p.periodStart)} 〜 ${p.periodEnd?ymd(p.periodEnd):'（終わりの日が未入力）'}`:'対象期間が未入力です。「目標設定シート」の基本情報で入れておくと、保管するときの名前になります。'}　記録 ${recs.length}回</p>
+    <div><button class="btn" data-act="close-term" style="border-color:var(--ember);color:var(--ember)">この期を締める</button></div>
+  </div>`;
+}
+
+/* ---- これまでの期（読むだけ） ---- */
+function termsView(p){
+  const ts=[...termsOf(p.id)].reverse();
+  if(!ts.length) return `<div class="card emptystate"><h3>まだ締めた期はありません</h3><p>「振り返り」タブの下で期を締めると、ここに残ります。</p></div>`;
+  const all=allRecordsOf(p.id);
+  return ts.map(t=>{
+    const recs=all.filter(r=>(!t.startAt || tms(r.createdAt)>=tms(t.startAt)) && tms(r.createdAt)<tms(t.closedAt));
+    const goals=(t.sheet?.goals||[]).map((g,i)=>({...g,i})).filter(g=>g.text||g.metric||g.forWhat);
+    const tot=goalTotals(recs);
+    return `<details class="sec"><summary>${esc(t.label||'期')}<span class="small muted" style="font-family:var(--font-body);font-weight:400">${esc([t.temp,t.role].filter(Boolean).join('・'))}</span></summary><div class="in">
+      <div class="link"><div class="lab">個人ミッション</div><div class="val mission">${t.sheet?.mission?nl(t.sheet.mission):'—'}</div></div>
+      <div class="link"><div class="lab">目標と結果</div><div class="val" style="display:flex;flex-direction:column;gap:8px">${goals.length?goals.map(g=>`<div class="goal-line"><span class="gno">目標${g.i+1}</span><div>${esc(fw(g))}${esc(g.text)}<div class="small muted">${esc(g.metric||'')}　開始 ${esc(g.start||'—')} → 期間の合計 <b class="num">${tot[g.i]}</b>${esc(g.unit||'')}</div></div></div>`).join(''):'—'}</div></div>
+      ${t.review?.end?.a||t.review?.end?.b||t.review?.end?.c?`<div class="link"><div class="lab">期末の振り返り</div><div class="val" style="display:flex;flex-direction:column;gap:6px">
+        ${t.review.end.a?`<div class="kv"><b>広がったこと</b>${nl(t.review.end.a)}</div>`:''}
+        ${t.review.end.b?`<div class="kv"><b>続く形になったもの</b>${nl(t.review.end.b)}</div>`:''}
+        ${t.review.end.c?`<div class="kv"><b>できなかった理由</b>${nl(t.review.end.c)}</div>`:''}</div></div>`:''}
+      ${(t.history||[]).length?`<div class="link"><div class="lab">見直しの履歴</div><div class="val hist">${t.history.map(h=>`<div><span class="num">${ymd(h.at)}</span>　${esc(h.note||'')}</div>`).join('')}</div></div>`:''}
+      <div class="link"><div class="lab">週の記録</div><div class="val">${recs.length}回${recs.length?`<div class="hist" style="margin-top:6px">${recs.filter(r=>r.fact).slice(-12).reverse().map(r=>`<div><span class="num">${md(r.date)}</span> ${esc(r.fact)}</div>`).join('')}</div>`:''}</div></div>
+      <p class="small muted">${ymd(t.closedAt)} に ${esc(t.closedBy||'')} が締めました</p>
+    </div></details>`;}).join('');
+}
+function downloadJson(obj, filename){
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
 }
 
 /* ---------- 入力 ---------- */
@@ -665,6 +729,12 @@ document.addEventListener('click', async e=>{
   if(act==='logout'){ if(ui.dirty && !leaveOk()) return; ui.dirty=false; ui.pid=null; await api.logout(); return; }
   if(act==='resend'){ try{ await api.resendVerify(); toast('確認メールを送りました'); }catch(err){ toast(authMsg(err)); } return; }
   if(act==='verified'){ const ok=await api.checkVerified(); if(!ok) toast('まだ確認が済んでいません。メールのリンクを押してください'); return; }
+  if(act==='export'){
+    if(!me.admin) return; t.disabled=true; t.textContent='書き出し中…';
+    try{ const data=await api.exportAll(); downloadJson(data, `mokuhyo-note-backup-${today()}.json`); toast(`${data.people.length}人分を書き出しました`); }
+    catch(e){ console.error(e); toast('書き出せませんでした'); }
+    t.disabled=false; t.textContent='全データを書き出す'; return;
+  }
   if(act==='open-add'){ ui.addOpen=true; render(); $('#nname')?.focus(); return; }
   if(act==='close-add'){ ui.addOpen=false; render(); return; }
 
@@ -679,7 +749,7 @@ document.addEventListener('click', async e=>{
   if(act==='save-sheet'){
     const d=ui.draft; t.disabled=true; const now=new Date().toISOString();
     const hadGoals=activeGoals(p).length>0;
-    const history=[...(p.history||[]), {at:now, by:me.name, note:d.changeNote?.trim() || (hadGoals?'目標を見直した':'はじめて目標を書いた'), goals:d.sheet.goals.map(g=>({forWhat:g.forWhat,text:g.text,metric:g.metric}))}].slice(-30);
+    const history=[...(p.history||[]), {at:now, by:me.name, note:d.changeNote?.trim() || (hadGoals?'目標を見直した':'はじめて目標を書いた'), goals:d.sheet.goals.map(g=>({forWhat:g.forWhat,text:g.text,metric:g.metric}))}].slice(-200);
     const data={name:d.name.trim(),store:d.store,role:d.role.trim(),temp:d.temp,coach:d.coach.trim(),grower:d.grower.trim(),periodStart:d.periodStart,periodEnd:d.periodEnd,sheet:d.sheet,sheetUpdatedAt:now,history};
     if(me.admin){ data.ownerEmail=normEmail(d.ownerEmail); data.coachEmails=emailList(d.coachEmails); }
     const voices=statusOf(p).voices;
@@ -693,6 +763,23 @@ document.addEventListener('click', async e=>{
   if(act==='save-review'){
     t.disabled=true; const ok=await saveSafe(()=>api.updatePerson(p.id,{review:ui.draft}),'振り返りを保存しました');
     if(ok) ui.dirty=false; t.disabled=false; return;
+  }
+  if(act==='close-term'){
+    if(t.dataset.arm!=='1'){ t.dataset.arm='1'; t.textContent='もう一度押すと締めます（元に戻せません）'; setTimeout(()=>{ if(t.isConnected){ t.dataset.arm=''; t.textContent='この期を締める'; } },5000); return; }
+    if(ui.dirty){ toast('振り返りを先に保存してください'); return; }
+    t.disabled=true;
+    const now=new Date().toISOString(); const recs=recordsOf(p.id);
+    const start=p.periodStart || recs[0]?.date || (p.termStartAt||now).slice(0,10);
+    const end=p.periodEnd || today();
+    const term={label:`${ymd(start)} 〜 ${ymd(end)}`, periodStart:start, periodEnd:end, startAt:p.termStartAt||null, closedAt:now, closedBy:me.name,
+      name:p.name||'', store:p.store||'', role:p.role||'', temp:p.temp||'', coach:p.coach||'', grower:p.grower||'',
+      sheet:p.sheet||blankSheet(), review:p.review||blankReview(), history:p.history||[], recordCount:recs.length, totals:goalTotals(recs)};
+    const old=p.sheet||blankSheet(); const ns=blankSheet();
+    Object.assign(ns,{m10:old.m10||ns.m10, m11:old.m11||ns.m11, mission:old.mission||'', area:old.area||'', areaWhy:old.areaWhy||'', r21:old.r21||ns.r21});
+    const next={termStartAt:now, periodStart:today(), periodEnd:'', sheet:ns, review:blankReview(), history:[], sheetUpdatedAt:null};
+    const ok=await saveSafe(()=>api.closeTerm(p.id,term,next),'この期を保管しました。次の期の目標を書きましょう');
+    if(ok){ ui.tab='sheet'; ui.dirty=false; ui.draft=null; ui.draftKey=''; render(); window.scrollTo({top:0}); } else t.disabled=false;
+    return;
   }
   if(act==='delete-person'){
     if(!me.admin) return;

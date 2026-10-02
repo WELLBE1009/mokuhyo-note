@@ -16,15 +16,8 @@
   --font-body:"Zen Kaku Gothic New","Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
   --font-num:"IBM Plex Mono",ui-monospace,monospace;
   --r:10px;
+  color-scheme:light;  /* 端末がダークモードでも、いつも明るい画面で表示する */
 }
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#121A16;--paper:#1A241F;--ink:#E3EAE5;--muted:#9AAAA1;--line:#2E3B34;
-  --forest:#7FB89A;--forest-soft:#22362B;--ember:#E58A55;--ember-soft:#3A2519;
-  --ok:#7CC79A;--ok-soft:#1E3427;--warn:#E0B65A;--warn-soft:#352B14;color-scheme:dark}}
-:root[data-theme="dark"]{
-  --bg:#121A16;--paper:#1A241F;--ink:#E3EAE5;--muted:#9AAAA1;--line:#2E3B34;
-  --forest:#7FB89A;--forest-soft:#22362B;--ember:#E58A55;--ember-soft:#3A2519;
-  --ok:#7CC79A;--ok-soft:#1E3427;--warn:#E0B65A;--warn-soft:#352B14;color-scheme:dark}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.7;padding:0 16px;padding-block:20px 60px}
 .wrap{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
