@@ -40,6 +40,8 @@ function person(){ return state.people.find(p=>p.id===ui.pid) || null; }
 function recordsOf(pid){ return [...(state.records[pid]||[])].sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||'')); }
 function roleOf(p){ if(!p) return ''; if(p.ownerEmail===me.email) return '本人'; if((p.coachEmails||[]).includes(me.email)) return 'コーチ'; return me.admin? '管理者' : ''; }
 const canConfirm = p => roleOf(p)!=='本人';
+// 一覧の印：その人の役割ではなく「あなたとの関係」。管理者として見えているだけの人には付けない
+const relationBadge = p => { const r=roleOf(p); return r==='本人'? '<span class="role">あなたのノート</span>' : r==='コーチ'? '<span class="role">あなたが担当</span>' : ''; };
 const canDeleteRecord = () => me.admin;  // 記録の削除は管理者だけ（firestore.rules と同じ）
 
 function showNotice(m){ const n=$('#notice'); n.textContent=m; n.hidden=!m; }
@@ -110,6 +112,13 @@ async function firebaseApi(cfg){
     async addRecord(pid,data){ await F.addDoc(F.collection(db,'people',pid,'records'),data); },
     async updateRecord(pid,rid,data){ await F.updateDoc(F.doc(db,'people',pid,'records',rid),data); },
     async deleteRecord(pid,rid){ await F.deleteDoc(F.doc(db,'people',pid,'records',rid)); },
+    // メンバーを消す：先に週の記録をすべて消してから、本人の文書を消す
+    async deletePerson(pid){
+      const snap=await F.getDocs(F.collection(db,'people',pid,'records'));
+      for(const d of snap.docs) await F.deleteDoc(d.ref);
+      recUnsubs.get(pid)?.(); recUnsubs.delete(pid); delete state.records[pid];
+      await F.deleteDoc(F.doc(db,'people',pid));
+    },
   };
 }
 
@@ -137,6 +146,7 @@ function demoApi(){
     async addRecord(pid,data){ (state.records[pid] ||= []).push({id:id(),...data}); push(); },
     async updateRecord(pid,rid,data){ state.records[pid]=(state.records[pid]||[]).map(r=>r.id===rid?{...r,...data}:r); push(); },
     async deleteRecord(pid,rid){ state.records[pid]=(state.records[pid]||[]).filter(r=>r.id!==rid); push(); },
+    async deletePerson(pid){ state.people=state.people.filter(p=>p.id!==pid); delete state.records[pid]; push(); },
   };
 }
 
@@ -317,7 +327,7 @@ function teamView(){
   const rows=sortedPeople().map(p=>{
     const s=statusOf(p);
     return `<tr class="row" data-go="${esc(p.id)}">
-      <td><b>${esc(p.name||'名前未入力')}</b> <span class="role">${esc(roleOf(p))}</span><div class="small muted">${esc([p.store,p.role].filter(Boolean).join('・'))}</div></td>
+      <td><b>${esc(p.name||'名前未入力')}</b> ${relationBadge(p)}<div class="small muted">${esc([p.store,p.role].filter(Boolean).join('・'))}</div></td>
       <td class="small">${esc(p.coach||'—')}</td>
       <td>${s.last? `<span class="num">${md(s.last.date)}</span> <span class="pill ${s.sinceRec>10?'warn':'ok'}">${s.sinceRec<=0?'今日':s.sinceRec+'日前'}</span>` : '<span class="pill warn">まだ記録なし</span>'}</td>
       <td>${s.unconfirmed? `<span class="pill plain">${s.unconfirmed}件</span>`:'<span class="muted small">—</span>'}</td>
@@ -345,7 +355,7 @@ function chainView(p){
       <button class="btn ember" data-tab="sheet">目標を見直す</button></div>` : '';
   return `<div class="chain">
     <div class="chain-head">
-      <div><h2>${esc(p.name||'名前未入力')} <span class="role">あなたは${esc(roleOf(p))}</span></h2><div class="small muted">${esc([p.store,p.role,p.temp?('現在 '+p.temp):'',p.coach?('コーチ '+p.coach):'',p.grower?('成長担当 '+p.grower):''].filter(Boolean).join('　'))}</div></div>
+      <div><h2>${esc(p.name||'名前未入力')} <span class="role">${esc(roleOf(p)==='管理者'?'管理者として閲覧中':'あなたは'+roleOf(p))}</span></h2><div class="small muted">${esc([p.store,p.role,p.temp?('現在 '+p.temp):'',p.coach?('コーチ '+p.coach):'',p.grower?('成長担当 '+p.grower):''].filter(Boolean).join('　'))}</div></div>
       <div class="small muted">対象期間 ${p.periodStart?ymd(p.periodStart):'—'} 〜 ${p.periodEnd?ymd(p.periodEnd):'—'}</div>
     </div>
     <div class="link"><div class="lab">チームミッション</div><div class="val">街にサウナという木を植え、森を育て、人々に元気を届ける${sh.area?` <span class="pill plain">${esc(sh.area)}を担う</span>`:''}</div></div>
@@ -524,6 +534,11 @@ function sheetView(p){
     ${me.admin? `<div class="grid2">
       <label class="f">本人のメールアドレス<span class="h">管理者だけが変えられます</span>${tx('ownerEmail',d.ownerEmail)}</label>
       <label class="f">コーチのメールアドレス<span class="h">複数はカンマ区切り。ここにある人がこのノートを見られます</span>${tx('coachEmails',d.coachEmails)}</label>
+    </div>
+    <div class="goalbox" style="gap:8px">
+      <b>このメンバーを削除する</b>
+      <p class="small muted">目標設定シート・週の記録・振り返りがすべて消え、元に戻せません。退職や異動で記録を残したいときは、削除せずに本人とコーチのメールアドレスを空にしてください（管理者だけが見られる状態になります）。</p>
+      <div class="inline-form"><input type="text" id="delConfirm" placeholder="確認のため、氏名「${esc(p.name||'')}」を入力" style="flex:1;min-width:200px"><button type="button" class="btn" data-act="delete-person" style="border-color:var(--ember);color:var(--ember)">削除する</button></div>
     </div>` : `<p class="small muted">このノートを見られる人：本人（${esc(p.ownerEmail||'—')}）、コーチ（${esc((p.coachEmails||[]).join('、')||'—')}）、管理者。変更は管理者に依頼してください。</p>`}
   </div></details>
 
@@ -678,6 +693,16 @@ document.addEventListener('click', async e=>{
   if(act==='save-review'){
     t.disabled=true; const ok=await saveSafe(()=>api.updatePerson(p.id,{review:ui.draft}),'振り返りを保存しました');
     if(ok) ui.dirty=false; t.disabled=false; return;
+  }
+  if(act==='delete-person'){
+    if(!me.admin) return;
+    const typed=(document.getElementById('delConfirm')?.value||'').trim();
+    if(!p.name || typed!==p.name.trim()){ toast('確認のため、氏名を正確に入力してください'); return; }
+    t.disabled=true;
+    const name=p.name;
+    const ok=await saveSafe(()=>api.deletePerson(p.id),`${name}さんを削除しました`);
+    if(ok){ ui.pid=null; ui.dirty=false; ui.draft=null; ui.draftKey=''; ls.set('mn.pid',''); render(); renderPeople(); window.scrollTo({top:0}); } else t.disabled=false;
+    return;
   }
   if(act==='confirm'){ await saveSafe(()=>api.updateRecord(p.id,t.dataset.id,{confirmedAt:new Date().toISOString(),confirmedBy:me.name}),'確認しました'); return; }
   if(act==='coach-note'){
