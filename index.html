@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>目標と記録ノート</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <small>ウェルビー / サウナラボ　温度システム β版</small>
+      <h1>目標と記録ノート</h1>
+    </div>
+    <div id="account" class="account"></div>
+  </header>
+  <div class="people" id="people"></div>
+  <div id="notice" class="notice" hidden></div>
+  <main id="main">
+    <div class="card emptystate">
+      <h2>読み込んでいます</h2>
+      <p class="muted">目標設定シートと週次記録を、ひとつの画面で書いて見返せるノートです。</p>
+    </div>
+  </main>
+</div>
+<div id="toast" class="toast" hidden></div>
+<script src="firebase-config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+rules_version = '2';
+
+// 目標と記録ノート — Cloud Firestore セキュリティルール
+// 見られるのは「本人」「コーチ」「管理者」だけ。
+//   本人   … people/{pid}.ownerEmail と同じメールでログインした人
+//   コーチ … people/{pid}.coachEmails に入っているメールでログインした人
+//   管理者 … admins/{メールアドレス} という文書がある人（Firebase コンソールで手で作る）
+// メールアドレスは確認済み（Googleログイン、または確認メールのリンクを押した）でないと何も読めません。
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email_verified == true;
+    }
+    function me() { return request.auth.token.email.lower(); }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(me()));
+    }
+    function canSee(p) {
+      return signedIn() && (p.ownerEmail == me() || me() in p.coachEmails);
+    }
+
+    // 管理者の名簿：自分の分だけ読める。書き換えはコンソールからのみ
+    match /admins/{email} {
+      allow read: if signedIn() && email == me();
+      allow write: if false;
+    }
+
+    match /people/{pid} {
+      allow read: if isAdmin() || canSee(resource.data);
+      allow create, delete: if isAdmin();
+      // 本人とコーチはシートを書けるが、「誰が見られるか」は変えられない
+      allow update: if isAdmin()
+        || (canSee(resource.data)
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerEmail', 'coachEmails']));
+
+      match /records/{rid} {
+        function personDoc() { return get(/databases/$(database)/documents/people/$(pid)).data; }
+        allow read, create: if isAdmin() || canSee(personDoc());
+        // 書いた記録の本文は変えられない。あとから付けられるのは「確認」「ひとこと」「見直しについて話した」だけ
+        allow update: if isAdmin()
+          || (canSee(personDoc())
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['confirmedAt', 'confirmedBy', 'coachNote', 'coachNoteBy', 'voiceDone']));
+        // 削除は管理者だけ（書き間違いは管理者に依頼）
+        allow delete: if isAdmin();
+      }
+    }
+  }
+}
