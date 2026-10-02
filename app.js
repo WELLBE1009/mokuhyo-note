@@ -24,11 +24,14 @@ const STORES = ['今池店','栄店','福岡店','本社・その他'];
 const REVIEW_DAYS = 28;   // 目標シートを見直す目安（日）
 const REVIEW_RECORDS = 4; // または、この回数の記録がたまったら
 const blankGoal = () => ({forWhat:'',text:'',evidence:'',metric:'',unit:'',start:'',m1:'',y1:'',kind:'',checks:[false,false,false,false]});
-const blankSheet = () => ({m10:['','',''],m11:['','',''],mission:'',area:'',areaWhy:'',r21:['','',''],r22:['','',''],r23:'',goals:[blankGoal(),blankGoal(),blankGoal()],readChecks:[false,false,false,false]});
-const blankReview = () => ({mid:[0,1,2].map(()=>({done:'',stuck:'',decision:'',reason:''})),end:{a:'',b:'',c:''}});
+const blankSheet = () => ({m10:['','',''],m11:['','',''],mission:'',area:'',areaWhy:'',r21:['','',''],r22:['','',''],r23:'',goals:[blankGoal()],readChecks:[false,false,false,false]});
+const blankMid = () => ({done:'',stuck:'',decision:'',reason:''});
+const blankReview = () => ({mid:[blankMid()],end:{a:'',b:'',c:''}});
 const clone = o => JSON.parse(JSON.stringify(o));
 const fw = g => { const t=(g.forWhat||'').trim().replace(/[、。,]$/,''); if(!t) return ''; return /ため(に)?$/.test(t)? t+'、' : t+'ために、'; };
-const activeGoals = p => (p?.sheet?.goals||[]).map((g,i)=>({...g,i})).filter(g=>g.text||g.metric||g.forWhat);
+// 目標の数は自由。一度使った目標は消さずに「外す（archived）」ので、記録の数値の位置（何番目の目標か）がずれない
+const activeGoals = p => (p?.sheet?.goals||[]).map((g,i)=>({...g,i})).filter(g=>!g.archived && (g.text||g.metric||g.forWhat));
+const goalCount = p => Math.max(1,(p?.sheet?.goals||[]).length);
 
 /* ---------- 状態 ---------- */
 const me = { email:'', name:'', admin:false, signedIn:false };
@@ -37,14 +40,14 @@ const ui = { pid: ls.get('mn.pid') || null, tab: 'record', dirty:false, draft:nu
 let api = null;   // 下の firebaseApi() か demoApi()
 
 function person(){ return state.people.find(p=>p.id===ui.pid) || null; }
-const byDate = (a,b)=>(a.date||'').localeCompare(b.date||'') || (a.createdAt||'').localeCompare(b.createdAt||'');
+const byDate = (a,b)=>(a.date||'').localeCompare(b.date||'') || ((Date.parse(a.createdAt||'')||0)-(Date.parse(b.createdAt||'')||0));
 function allRecordsOf(pid){ return [...(state.records[pid]||[])].sort(byDate); }
 // いまの期の記録だけ（前の期を締めた時刻より後に書いたもの）
 const tms = v => Date.parse(v||'')||0;  // 時刻の比較はタイムゾーン表記に左右されないよう数値で
 function recordsOf(pid){ const p=state.people.find(x=>x.id===pid); const st=p?.termStartAt; return allRecordsOf(pid).filter(r=>!st || tms(r.createdAt)>=tms(st)); }
 function termsOf(pid){ return [...(state.terms[pid]||[])].sort((a,b)=>(a.closedAt||'').localeCompare(b.closedAt||'')); }
 // 期ごとの数値の合計（目標1〜3）
-const goalTotals = recs => [0,1,2].map(i=>recs.reduce((a,r)=>a+(Number(r.values?.[i])||0),0));
+const goalTotals = recs => { const n=Math.max(0,...recs.map(r=>(r.values||[]).length)); return Array.from({length:n},(_,i)=>recs.reduce((a,r)=>a+(Number(r.values?.[i])||0),0)); };
 function roleOf(p){ if(!p) return ''; if(p.ownerEmail===me.email) return '本人'; if((p.coachEmails||[]).includes(me.email)) return 'コーチ'; return me.admin? '管理者' : ''; }
 const canConfirm = p => roleOf(p)!=='本人';
 // 一覧の印：その人の役割ではなく「あなたとの関係」。管理者として見えているだけの人には付けない
@@ -412,7 +415,7 @@ function tabView(p){
 
 /* ---- 今週の記録 ---- */
 function recordDraft(p){
-  if(ui.draftKey!=='record:'+p.id || !ui.draft){ ui.draft={date:today(),check:['','',''],checkNote:'',values:['','',''],fact:'',stuck:'',next:''}; ui.draftKey='record:'+p.id; }
+  if(ui.draftKey!=='record:'+p.id || !ui.draft){ const n=goalCount(p); ui.draft={date:today(),check:Array(n).fill(''),checkNote:'',values:Array(n).fill(''),fact:'',stuck:'',next:''}; ui.draftKey='record:'+p.id; }
   return ui.draft;
 }
 function recordView(p){
@@ -525,7 +528,7 @@ function chartSvg(g, months, vals){
 function sheetDraft(p){
   if(ui.draftKey!=='sheet:'+p.id || !ui.draft){
     const base={name:p.name||'',store:p.store||'',role:p.role||'',temp:p.temp||'',coach:p.coach||'',grower:p.grower||'',periodStart:p.periodStart||'',periodEnd:p.periodEnd||'',ownerEmail:p.ownerEmail||'',coachEmails:(p.coachEmails||[]).join(', '),sheet:Object.assign(blankSheet(),clone(p.sheet||{})),changeNote:''};
-    while(base.sheet.goals.length<3) base.sheet.goals.push(blankGoal());
+    if(!base.sheet.goals.length) base.sheet.goals.push(blankGoal());
     ui.draft=base; ui.draftKey='sheet:'+p.id;
   }
   return ui.draft;
@@ -537,7 +540,7 @@ function sheetView(p){
   const open = activeGoals(p).length ? 'goals' : (d.name?'mission':'basic');
   const voices = st.voices.map(r=>`<div><span class="num">${md(r.date)}</span> ${(r.check||[]).map((c,i)=>c==='fix'?`目標${i+1}を直したい`:c==='change'?`目標${i+1}を変えたい`:'').filter(Boolean).join('・')}${r.checkNote?`：${esc(r.checkNote)}`:''}</div>`).join('');
   const goalBox=(g,i)=>`<div class="goalbox">
-    <h3>目標 ${i+1}${i===0?'':' <span class="small muted">（任意）</span>'}</h3>
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><h3>目標 ${i+1}</h3><button type="button" class="btn ghost small" data-act="archive-goal" data-i="${i}">この目標を外す</button></div>
     <label class="f">「〜のために」の部分<span class="h">個人ミッションとつながる唯一の接続部分です。ここが書けない目標は、まだ目標になっていません。</span>${tx(`sheet.goals.${i}.forWhat`,g.forWhat,'例：初めて来店されたお客様が迷わず安心して使い始められるようにするために')}</label>
     <label class="f">いつまでに・誰が・どんな状態になるようにする${ta(`sheet.goals.${i}.text`,g.text,'例：3月までに、自分以外の2名が同じご案内をできる状態にする')}</label>
     <div class="grid3">
@@ -606,9 +609,11 @@ function sheetView(p){
     <label class="f">2-3 つながりの確認<span class="h">〔個人ミッションの一部〕のために、わたしは新しく〔2-2の②〕を最後まで見届け、〔2-2の③〕を拾いにいく。</span>${ta('sheet.r23',s.r23)}</label>
   </div></details>
 
-  <details class="sec" ${open==='goals'?'open':''}><summary>3. 目標（3つまで）</summary><div class="in">
+  <details class="sec" ${open==='goals'?'open':''}><summary>3. 目標</summary><div class="in">
     <p class="hint">文型：〔　　〕のために、〔いつまでに〕〔誰が〕〔どんな状態〕になるようにする。それは〔何を見れば〕分かる。1か月のおためしでは目標は1つ（多くても2つ）。</p>
-    ${s.goals.slice(0,3).map(goalBox).join('')}
+    ${s.goals.map((g,i)=>g.archived?'':goalBox(g,i)).join('')}
+    <div><button type="button" class="btn" data-act="add-goal">＋ 目標を追加</button></div>
+    ${s.goals.some(g=>g.archived)?`<div class="hist small"><span class="muted">外した目標（これまでの記録は残っています）</span>${s.goals.map((g,i)=>g.archived?`<div>目標${i+1}：${esc(fw(g))}${esc(g.text||'')} <button type="button" class="btn ghost small" data-act="restore-goal" data-i="${i}">戻す</button></div>`:'').join('')}</div>`:''}
     <div class="checks"><span class="small muted">3-4 最後の確認（コーチと一緒に、声に出して読んでから）</span>
       ${['言葉に無理がない（自分の言葉になっている）','「会社に言われたから」ではなく「自分がやりたいから」と言える','期末に、できたかできなかったかを、自分で判定できる','読み上げたとき、コーチが「なぜそれをやるのか」を聞き返さずに理解できた'].map((l,k)=>`<label><input type="checkbox" id="rc${k}" data-d="sheet.readChecks.${k}" ${s.readChecks?.[k]?'checked':''}><span>${l}</span></label>`).join('')}
       <p class="hint">1つでもチェックが付かないときは、目標ではなく1（ミッション）か2（責任の範囲）に戻ってください。</p>
@@ -630,6 +635,7 @@ function reviewDraft(p){
 }
 function reviewView(p){
   const goals=activeGoals(p); const d=reviewDraft(p); const recs=recordsOf(p.id);
+  goals.forEach(g=>{ if(!d.mid[g.i]) d.mid[g.i]=blankMid(); });
   if(!goals.length) return `<div class="card emptystate"><h3>先に目標を書きます</h3><p>振り返りは、期首に立てた目標ごとに書きます。</p></div>`;
   const facts=recs.filter(r=>r.fact).slice(-8).reverse().map(r=>`<div><span class="num">${md(r.date)}</span> ${esc(r.fact)}</div>`).join('');
   const sum=i=>recs.reduce((a,r)=>a+(Number(r.values?.[i])||0),0);
@@ -815,10 +821,26 @@ document.addEventListener('click', async e=>{
     if(ok){ ui.pid=null; ui.dirty=false; ui.draft=null; ui.draftKey=''; ls.set('mn.pid',''); render(); renderPeople(); window.scrollTo({top:0}); } else t.disabled=false;
     return;
   }
+  if(act==='add-goal' || act==='archive-goal' || act==='restore-goal'){
+    const d=ui.draft; if(!d?.sheet) return;
+    const i=Number(t.dataset.i);
+    if(act==='add-goal'){ d.sheet.goals.push(blankGoal()); }
+    else if(act==='archive-goal'){
+      const g=d.sheet.goals[i]; const empty=!(g.text||g.metric||g.forWhat);
+      const used=allRecordsOf(p.id).some(r=>r.values && r.values[i]!==undefined && r.values[i]!==0 && r.values[i]!=='');
+      // 何も書いていない最後の目標は消す。それ以外は「外す」だけ（記録の位置を守る）
+      if(empty && !used && i===d.sheet.goals.length-1 && d.sheet.goals.length>1) d.sheet.goals.pop(); else g.archived=true;
+    } else if(act==='restore-goal'){ d.sheet.goals[i].archived=false; }
+    ui.dirty=true; const y=window.scrollY; $('#tabbody').innerHTML=tabView(p); window.scrollTo(0,y);
+    document.querySelectorAll('#tabbody details.sec').forEach(x=>{ if(x.querySelector('[data-act=add-goal]')) x.open=true; });
+    if(act==='add-goal') document.getElementById(`sheet-goals-${d.sheet.goals.length-1}-forWhat`)?.focus();
+    toast(act==='add-goal'?'目標を足しました。書いたら「シートを保存」を押してください':act==='archive-goal'?'目標を外しました。「シートを保存」で確定します':'目標を戻しました。「シートを保存」で確定します');
+    return;
+  }
   if(act==='edit-record'){
     if(ui.dirty && !leaveOk()) return;
     const r=allRecordsOf(p.id).find(x=>x.id===t.dataset.id); if(!r) return;
-    ui.edit={rid:r.id, date:r.date||'', values:[0,1,2].map(i=>r.values?.[i]??''), fact:r.fact||'', stuck:r.stuck||'', next:r.next||'', why:''};
+    ui.edit={rid:r.id, date:r.date||'', values:Array.from({length:Math.max(goalCount(p),(r.values||[]).length)},(_,i)=>r.values?.[i]??''), fact:r.fact||'', stuck:r.stuck||'', next:r.next||'', why:''};
     render(); document.getElementById('ed-date')?.focus(); return;
   }
   if(act==='cancel-edit'){ ui.edit=null; render(); return; }
@@ -826,7 +848,7 @@ document.addEventListener('click', async e=>{
     const r=allRecordsOf(p.id).find(x=>x.id===t.dataset.id); const e=ui.edit; if(!r||!e) return;
     const after={date:e.date||r.date, values:e.values.map(v=>v===''?0:Number(v)), fact:e.fact.trim(), stuck:e.stuck.trim(), next:e.next.trim()};
     const before={date:r.date||'', values:r.values||[], fact:r.fact||'', stuck:r.stuck||'', next:r.next||''};
-    if(JSON.stringify(after)===JSON.stringify({...before,values:[0,1,2].map(i=>Number(before.values[i]??0))})){ toast('変わったところがありません'); return; }
+    if(JSON.stringify(after)===JSON.stringify({...before,values:after.values.map((_,i)=>Number(before.values[i]??0))})){ toast('変わったところがありません'); return; }
     t.disabled=true; const now=new Date().toISOString();
     const edits=[...(r.edits||[]), {at:now, by:me.name, why:(e.why||'').trim(), before}];
     const ok=await saveSafe(()=>api.updateRecord(p.id,r.id,{...after, edits, editedAt:now, editedBy:me.name}),'訂正しました（元の記録も残っています）');
