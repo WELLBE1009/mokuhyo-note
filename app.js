@@ -36,7 +36,7 @@ const goalCount = p => Math.max(1,(p?.sheet?.goals||[]).length);
 /* ---------- 状態 ---------- */
 const me = { email:'', name:'', admin:false, signedIn:false };
 const state = { people:[], records:{}, terms:{}, ready:false };
-const ui = { pid: ls.get('mn.pid') || null, tab: 'record', dirty:false, draft:null, draftKey:'', addOpen:false, edit:null };
+const ui = { showInactive:false, pid: ls.get('mn.pid') || null, tab: 'record', dirty:false, draft:null, draftKey:'', addOpen:false, edit:null };
 let api = null;   // 下の firebaseApi() か demoApi()
 
 function person(){ return state.people.find(p=>p.id===ui.pid) || null; }
@@ -47,6 +47,14 @@ const tms = v => Date.parse(v||'')||0;  // 時刻の比較はタイムゾーン�
 function recordsOf(pid){ const p=state.people.find(x=>x.id===pid); const st=p?.termStartAt; return allRecordsOf(pid).filter(r=>!st || tms(r.createdAt)>=tms(st)); }
 function termsOf(pid){ return [...(state.terms[pid]||[])].sort((a,b)=>(a.closedAt||'').localeCompare(b.closedAt||'')); }
 // 期ごとの数値の合計（目標1〜3）
+// 数値：空欄は null（未入力）、0 は「本当にゼロ」。表示と保存で区別する
+const toVal = v => (v===''||v===null||v===undefined) ? null : Number(v);
+const showVal = v => (v===null||v===undefined) ? '未入力' : v;
+// 週の区切り（月曜はじまり）。同じ週に2回目を書くときに知らせるため
+const weekStart = iso => { const d=new Date((iso||today())+'T00:00:00'); const w=(d.getDay()+6)%7; d.setDate(d.getDate()-w); return d; };
+const weekKey = iso => { const d=weekStart(iso); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+const weekLabel = iso => { const a=weekStart(iso); const b=new Date(a); b.setDate(a.getDate()+6); return `${a.getMonth()+1}/${a.getDate()}〜${b.getMonth()+1}/${b.getDate()}`; };
+const isFuture = iso => !!iso && iso > today();
 const goalTotals = recs => { const n=Math.max(0,...recs.map(r=>(r.values||[]).length)); return Array.from({length:n},(_,i)=>recs.reduce((a,r)=>a+(Number(r.values?.[i])||0),0)); };
 function roleOf(p){ if(!p) return ''; if(p.ownerEmail===me.email) return '本人'; if((p.coachEmails||[]).includes(me.email)) return 'コーチ'; return me.admin? '管理者' : ''; }
 const canConfirm = p => roleOf(p)!=='本人';
@@ -115,8 +123,11 @@ async function firebaseApi(cfg){
     },
     // 期を締める：その期のシートと振り返りを terms に保管してから、次の期の形に person を更新
     async closeTerm(pid, term, next){
-      await F.addDoc(F.collection(db,'people',pid,'terms'), term);
-      await F.updateDoc(F.doc(db,'people',pid), next);
+      // 保管と次の期への切り替えを1回でまとめて保存（片方だけ成功することがない）
+      const b=F.writeBatch(db);
+      b.set(F.doc(F.collection(db,'people',pid,'terms')), term);
+      b.update(F.doc(db,'people',pid), next);
+      await b.commit();
     },
     // 管理者用：全員分を1つにまとめて返す（バックアップ）
     async exportAll(){
@@ -145,10 +156,10 @@ async function firebaseApi(cfg){
     // メンバーを消す：先に週の記録をすべて消してから、本人の文書を消す
     async deletePerson(pid){
       const snap=await F.getDocs(F.collection(db,'people',pid,'records'));
-      for(const d of snap.docs) await F.deleteDoc(d.ref);
       const ts=await F.getDocs(F.collection(db,'people',pid,'terms'));
-      for(const d of ts.docs) await F.deleteDoc(d.ref);
+      const refs=[...snap.docs.map(d=>d.ref), ...ts.docs.map(d=>d.ref)];
       recUnsubs.get(pid)?.(); recUnsubs.delete(pid); delete state.records[pid]; delete state.terms[pid];
+      for(let i=0;i<refs.length;i+=400){ const b=F.writeBatch(db); refs.slice(i,i+400).forEach(r=>b.delete(r)); await b.commit(); }
       await F.deleteDoc(F.doc(db,'people',pid));
     },
   };
@@ -253,7 +264,7 @@ function renderAccount(){
 }
 
 /* ---------- 人の切り替え ---------- */
-function sortedPeople(){ return [...state.people].sort((a,b)=>(a.store||'').localeCompare(b.store||'')||(a.name||'').localeCompare(b.name||'')); }
+function sortedPeople(){ return [...state.people].filter(p=>ui.showInactive || p.status!=='inactive').sort((a,b)=>(a.store||'').localeCompare(b.store||'')||(a.name||'').localeCompare(b.name||'')); }
 function renderPeople(){
   const box=$('#people');
   if(!me.admin && state.people.length<=1){ box.innerHTML=''; return; }
@@ -361,19 +372,21 @@ function teamView(){
   const rows=sortedPeople().map(p=>{
     const s=statusOf(p);
     return `<tr class="row" data-go="${esc(p.id)}">
-      <td><b>${esc(p.name||'名前未入力')}</b> ${relationBadge(p)}<div class="small muted">${esc([p.store,p.role].filter(Boolean).join('・'))}</div></td>
+      <td><b>${esc(p.name||'名前未入力')}</b> ${relationBadge(p)}${p.status==='inactive'?' <span class="pill warn">利用停止中</span>':''}<div class="small muted">${esc([p.store,p.role].filter(Boolean).join('・'))}</div></td>
       <td class="small">${esc(p.coach||'—')}</td>
       <td>${s.last? `<span class="num">${md(s.last.date)}</span> <span class="pill ${s.sinceRec>10?'warn':'ok'}">${s.sinceRec<=0?'今日':s.sinceRec+'日前'}</span>` : '<span class="pill warn">まだ記録なし</span>'}</td>
       <td>${s.unconfirmed? `<span class="pill plain">${s.unconfirmed}件</span>`:'<span class="muted small">—</span>'}</td>
       <td>${!activeGoals(p).length? '<span class="pill warn">目標を書く前</span>' : s.voices.length? `<span class="pill ember">見直したい声 ${s.voices.length}</span>` : s.needReview? '<span class="pill warn">見直しの時期</span>' : `<span class="small muted">${s.sinceSheet===null?'—':s.sinceSheet+'日前に更新'}</span>`}</td>
     </tr>`;}).join('');
-  const total=state.people.length, voices=state.people.filter(p=>statusOf(p).voices.length).length, stale=state.people.filter(p=>{const s=statusOf(p);return s.sinceRec===null||s.sinceRec>10}).length;
+  const act=state.people.filter(p=>p.status!=='inactive'); const inactiveN=state.people.length-act.length;
+  const total=act.length, voices=act.filter(p=>statusOf(p).voices.length).length, stale=act.filter(p=>{const s=statusOf(p);return s.sinceRec===null||s.sinceRec>10}).length;
   return `<div class="panel">
     <div class="card">
       <h2>みんなの様子</h2>
       <p class="muted small">コーチ・成長担当がすること：記録が続いているかの確認と、詰まっているところを聞くこと。内容の良し悪しや点数はつけません。</p>
       <p>${total}人のうち、<b>${stale}人</b>が10日以上記録なし、<b>${voices}人</b>から「目標を見直したい」という声が出ています。</p>
     </div>
+    ${me.admin && inactiveN?`<div><button class="btn ghost" data-act="toggle-inactive">${ui.showInactive?'利用停止中の人を隠す':`利用停止中の人も表示する（${inactiveN}人）`}</button></div>`:''}
     <div class="card"><div class="tablewrap"><table class="team">
       <thead><tr><th>氏名</th><th>コーチ</th><th>最後の記録</th><th>未確認</th><th>目標</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>
@@ -439,9 +452,9 @@ function recordView(p){
   </div>
 
   <div class="card">
-    <div class="step"><span class="sn">2</span><div><h3>今週の数値</h3><p class="hint">今週起きた分だけを入れます。0でも大事な記録です。</p></div></div>
+    <div class="step"><span class="sn">2</span><div><h3>今週の数値</h3><p class="hint">今週起きた分だけを入れます。0でも大事な記録です。数えていない週は空欄のままにすると「未入力」として残ります（0とは区別されます）。</p></div></div>
     ${goals.map(g=>`<div class="numrow">
-      <div><div>目標${g.i+1}：${esc(g.metric||'数えるもの未設定')}</div><div class="meta">ここまでの累計 <span class="num">${sum(g.i)}</span>${esc(g.unit)}${g.m1?`　1か月後の目安 <span class="num">${esc(g.m1)}</span>${esc(g.unit)}`:''}${last?`　前回 <span class="num">${esc(last.values?.[g.i]??'—')}</span>`:''}</div></div>
+      <div><div>目標${g.i+1}：${esc(g.metric||'数えるもの未設定')}</div><div class="meta">ここまでの累計 <span class="num">${sum(g.i)}</span>${esc(g.unit)}${g.m1?`　1か月後の目安 <span class="num">${esc(g.m1)}</span>${esc(g.unit)}`:''}${last?`　前回 <span class="num">${esc(showVal(last.values?.[g.i]))}</span>`:''}</div></div>
       <input type="number" inputmode="decimal" min="0" step="any" id="val${g.i}" data-d="values.${g.i}" value="${esc(d.values[g.i])}" aria-label="目標${g.i+1}の今週の数値">
     </div>`).join('')}
   </div>
@@ -453,7 +466,8 @@ function recordView(p){
       <label class="f">詰まっていること<textarea id="stuck" data-d="stuck" placeholder="例：日勤帯のメンバーに時間が取れていない">${esc(d.stuck)}</textarea></label>
       <label class="f">次の一歩<textarea id="next" data-d="next" placeholder="例：来週は日勤の△△さんに同じ手順を渡す">${esc(d.next)}</textarea></label>
     </div>
-    <label class="f" style="max-width:220px">記録日<input type="date" id="rdate" data-d="date" value="${esc(d.date)}"></label>
+    <label class="f" style="max-width:220px">記録日<input type="date" id="rdate" data-d="date" value="${esc(d.date)}" max="${today()}"></label>
+    ${(()=>{ const same=recs.filter(r=>weekKey(r.date)===weekKey(d.date)); return same.length?`<p class="notice">この週（${weekLabel(d.date)}）は、${same.map(r=>md(r.date)).join('・')} にもう記録があります。前の記録を直すなら「記録の流れ」の「訂正する」を使ってください。別の出来事として足すなら、このまま記録できます。</p>`:''; })()}
   </div>
   <div class="savebar">
     <span class="small muted">${goals.some(g=>!d.check[g.i])?'1の「このまま続けるか」を選ぶと保存できます':''}</span>
@@ -476,15 +490,15 @@ function flowView(p){
     if(ui.edit && ui.edit.rid===r.id) return editRecordForm(r, goals);
     const edits=r.edits||[];
     return `<div class="tl-item">
-      <div class="tl-date">${ymd(r.date)}</div>
+      <div class="tl-date">${ymd(r.date)}<div class="small">${weekLabel(r.date)}の週</div></div>
       <div class="tl-body">
-        <div class="tl-vals">${goals.map(g=>`<span class="pill plain">目標${g.i+1} <span class="num">${esc(r.values?.[g.i]??'—')}</span>${esc(g.unit)}</span>`).join('')}
+        <div class="tl-vals">${goals.map(g=>`<span class="pill plain" title="${esc(r.goalLabels?.[g.i]?('記録したときに数えたもの：'+r.goalLabels[g.i]):'')}">目標${g.i+1} <span class="num">${esc(showVal(r.values?.[g.i]))}</span>${r.values?.[g.i]==null?'':esc(g.unit)}${r.goalLabels?.[g.i] && r.goalLabels[g.i]!==g.metric?`（当時：${esc(r.goalLabels[g.i])}）`:''}</span>`).join('')}
           ${voice.length?`<span class="pill ember">${esc(voice.join('・'))}</span>`:''}</div>
         ${r.fact?`<div class="kv"><b>事実</b>${nl(r.fact)}</div>`:''}
         ${r.stuck?`<div class="kv"><b>詰まり</b>${nl(r.stuck)}</div>`:''}
         ${r.next?`<div class="kv"><b>次の一歩</b>${nl(r.next)}</div>`:''}
         ${r.checkNote?`<div class="kv"><b>引っかかり</b>${nl(r.checkNote)}</div>`:''}
-        ${edits.length?`<details class="small"><summary class="muted" style="cursor:pointer">訂正あり（${edits.length}回）・元の記録を見る</summary><div class="hist" style="margin-top:6px">${edits.map(e=>`<div><span class="num">${ymd(e.at)}</span> ${esc(e.by||'')} が訂正${e.why?`（${esc(e.why)}）`:''}。訂正前：${esc(ymd(e.before?.date))}／${goals.map(g=>`目標${g.i+1} ${esc(e.before?.values?.[g.i]??'—')}`).join('・')}${e.before?.fact?`／事実「${esc(e.before.fact)}」`:''}${e.before?.stuck?`／詰まり「${esc(e.before.stuck)}」`:''}${e.before?.next?`／次の一歩「${esc(e.before.next)}」`:''}</div>`).join('')}</div></details>`:''}
+        ${edits.length?`<details class="small"><summary class="muted" style="cursor:pointer">訂正あり（${edits.length}回）・元の記録を見る</summary><div class="hist" style="margin-top:6px">${edits.map(e=>`<div><span class="num">${ymd(e.at)}</span> ${esc(e.by||'')} が訂正${e.why?`（${esc(e.why)}）`:''}。訂正前：${esc(ymd(e.before?.date))}／${goals.map(g=>`目標${g.i+1} ${esc(showVal(e.before?.values?.[g.i]))}`).join('・')}${e.before?.fact?`／事実「${esc(e.before.fact)}」`:''}${e.before?.stuck?`／詰まり「${esc(e.before.stuck)}」`:''}${e.before?.next?`／次の一歩「${esc(e.before.next)}」`:''}</div>`).join('')}</div></details>`:''}
         ${r.coachNote?`<div class="coachnote"><b>${esc(r.coachNoteBy||'コーチ')}から</b>${nl(r.coachNote)}</div>`:''}
         ${coach && !r.coachNote?`<div class="inline-form"><textarea id="cn-${esc(r.id)}" placeholder="ひとこと返す（任意）。評価ではなく、問いかけや気づいたことを"></textarea><button class="btn" data-act="coach-note" data-id="${esc(r.id)}">返す</button></div>`:''}
         <div class="confirm-inline small">
@@ -541,6 +555,7 @@ function sheetView(p){
   const voices = st.voices.map(r=>`<div><span class="num">${md(r.date)}</span> ${(r.check||[]).map((c,i)=>c==='fix'?`目標${i+1}を直したい`:c==='change'?`目標${i+1}を変えたい`:'').filter(Boolean).join('・')}${r.checkNote?`：${esc(r.checkNote)}`:''}</div>`).join('');
   const goalBox=(g,i)=>`<div class="goalbox">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><h3>目標 ${i+1}</h3><button type="button" class="btn ghost small" data-act="archive-goal" data-i="${i}">この目標を外す</button></div>
+    ${g.text?`<p class="small muted">言葉を整える程度なら、このまま書き直して大丈夫です。目標の中身（数えるもの・対象の人）が変わるときは、書き換えずに「この目標を外す」→「＋ 目標を追加」で新しく立ててください。過去の記録との意味がずれずに残ります。</p>`:''}
     <label class="f">「〜のために」の部分<span class="h">個人ミッションとつながる唯一の接続部分です。ここが書けない目標は、まだ目標になっていません。</span>${tx(`sheet.goals.${i}.forWhat`,g.forWhat,'例：初めて来店されたお客様が迷わず安心して使い始められるようにするために')}</label>
     <label class="f">いつまでに・誰が・どんな状態になるようにする${ta(`sheet.goals.${i}.text`,g.text,'例：3月までに、自分以外の2名が同じご案内をできる状態にする')}</label>
     <div class="grid3">
@@ -576,8 +591,13 @@ function sheetView(p){
       <label class="f">コーチのメールアドレス<span class="h">複数はカンマ区切り。ここにある人がこのノートを見られます</span>${tx('coachEmails',d.coachEmails)}</label>
     </div>
     <div class="goalbox" style="gap:8px">
+      ${p.status==='inactive'
+        ? `<b>利用停止中（${ymd(p.stoppedAt)}〜）</b><p class="small muted">本人とコーチはこのノートを見られません。データは残っています。再開すると、停止前のメールアドレス（本人：${esc(p.formerOwnerEmail||'—')}、コーチ：${esc((p.formerCoachEmails||[]).join('、')||'—')}）に戻ります。</p><div><button type="button" class="btn" data-act="resume-person">利用を再開する</button></div>`
+        : `<b>退職・異動・休職のとき</b><p class="small muted">「利用停止」にすると、本人とコーチはこのノートを見られなくなりますが、目標設定シート・週の記録・振り返り・これまでの期はすべて残ります。あとから再開もできます。</p><div><button type="button" class="btn" data-act="suspend-person">利用を停止する</button></div>`}
+    </div>
+    <div class="goalbox" style="gap:8px">
       <b>このメンバーを削除する</b>
-      <p class="small muted">目標設定シート・週の記録・振り返りがすべて消え、元に戻せません。退職や異動で記録を残したいときは、削除せずに本人とコーチのメールアドレスを空にしてください（管理者だけが見られる状態になります）。</p>
+      <p class="small muted">テストで作った人など、残す必要のないデータだけに使ってください。目標設定シート・週の記録・振り返り・これまでの期がすべて消え、元に戻せません。退職や異動のときは、上の「利用停止」を使ってください。</p>
       <div class="inline-form"><input type="text" id="delConfirm" placeholder="確認のため、氏名「${esc(p.name||'')}」を入力" style="flex:1;min-width:200px"><button type="button" class="btn" data-act="delete-person" style="border-color:var(--ember);color:var(--ember)">削除する</button></div>
     </div>` : `<p class="small muted">このノートを見られる人：本人（${esc(p.ownerEmail||'—')}）、コーチ（${esc((p.coachEmails||[]).join('、')||'—')}）、管理者。変更は管理者に依頼してください。</p>`}
   </div></details>
@@ -672,7 +692,7 @@ function editRecordForm(r, goals){
   const e=ui.edit;
   return `<div class="tl-item"><div class="tl-date">訂正中</div><div class="tl-body goalbox">
     <p class="small muted">直した内容で上書きされますが、訂正前の内容と、いつ誰が直したかは「訂正あり」として残ります。</p>
-    <label class="f" style="max-width:220px">記録日<input type="date" id="ed-date" data-e="date" value="${esc(e.date)}"></label>
+    <label class="f" style="max-width:220px">記録日<input type="date" id="ed-date" data-e="date" value="${esc(e.date)}" max="${today()}"></label>
     ${goals.map(g=>`<div class="numrow"><div>目標${g.i+1}：${esc(g.metric||'')}</div><input type="number" inputmode="decimal" min="0" step="any" id="ed-v${g.i}" data-e="values.${g.i}" value="${esc(e.values[g.i]??'')}" aria-label="目標${g.i+1}の数値"></div>`).join('')}
     <label class="f">今週あった事実<textarea id="ed-fact" data-e="fact">${esc(e.fact)}</textarea></label>
     <div class="grid2">
@@ -721,7 +741,7 @@ document.addEventListener('input', e=>{
   if(e.target.dataset?.e && ui.edit){ setPath(ui.edit, e.target.dataset.e, e.target.value); return; }
   const el=e.target; const path=el.dataset?.d; if(!path||!ui.draft) return;
   setPath(ui.draft, path, el.type==='checkbox'? el.checked : el.value); ui.dirty=true;
-  if(el.type==='radio' && (path.startsWith('check.')||path.endsWith('.decision'))){
+  if((el.type==='radio' && (path.startsWith('check.')||path.endsWith('.decision'))) || (el.id==='rdate' && e.type==='input')){
     const y=window.scrollY; $('#tabbody').innerHTML=tabView(person()); window.scrollTo(0,y);
     document.getElementById(el.id)?.focus({preventScroll:true});
   }
@@ -765,13 +785,19 @@ document.addEventListener('click', async e=>{
     catch(e){ console.error(e); toast('書き出せませんでした'); }
     t.disabled=false; t.textContent='全データを書き出す'; return;
   }
+  if(act==='toggle-inactive'){ ui.showInactive=!ui.showInactive; renderPeople(); render(); return; }
   if(act==='open-add'){ ui.addOpen=true; render(); $('#nname')?.focus(); return; }
   if(act==='close-add'){ ui.addOpen=false; render(); return; }
 
   const p=person(); if(!p) return;
   if(act==='save-record'){
-    const d=ui.draft; t.disabled=true;
-    const rec={date:d.date||today(),values:d.values.map(v=>v===''?0:Number(v)),fact:d.fact.trim(),stuck:d.stuck.trim(),next:d.next.trim(),check:d.check,checkNote:d.checkNote.trim(),createdAt:new Date().toISOString(),createdBy:me.name,confirmedAt:null,confirmedBy:'',voiceDone:false,coachNote:'',coachNoteBy:''};
+    const d=ui.draft;
+    if(isFuture(d.date)){ toast('今日より先の日付では記録できません'); return; }
+    const same=recordsOf(p.id).filter(r=>weekKey(r.date)===weekKey(d.date||today()));
+    if(same.length && t.dataset.arm!=='1'){ t.dataset.arm='1'; t.textContent='同じ週に追加で記録する'; toast('この週はもう記録があります。もう一度押すと追加で記録します'); return; }
+    t.disabled=true;
+    const labels=(p.sheet?.goals||[]).map(g=>g.metric||'');
+    const rec={date:d.date||today(),values:d.values.map(toVal),goalLabels:labels,fact:d.fact.trim(),stuck:d.stuck.trim(),next:d.next.trim(),check:d.check,checkNote:d.checkNote.trim(),createdAt:new Date().toISOString(),createdBy:me.name,confirmedAt:null,confirmedBy:'',voiceDone:false,coachNote:'',coachNoteBy:''};
     const ok=await saveSafe(()=>api.addRecord(p.id,rec),'記録しました');
     if(ok){ ui.dirty=false; ui.draft=null; ui.draftKey=''; ui.tab='flow'; render(); window.scrollTo({top:0}); } else t.disabled=false;
     return;
@@ -811,6 +837,18 @@ document.addEventListener('click', async e=>{
     if(ok){ ui.tab='sheet'; ui.dirty=false; ui.draft=null; ui.draftKey=''; render(); window.scrollTo({top:0}); } else t.disabled=false;
     return;
   }
+  if(act==='suspend-person' || act==='resume-person'){
+    if(!me.admin) return;
+    if(ui.dirty){ toast('先にシートを保存するか、変更を取り消してください'); return; }
+    if(t.dataset.arm!=='1'){ t.dataset.arm='1'; t.textContent= act==='suspend-person'?'もう一度押すと停止します':'もう一度押すと再開します'; setTimeout(()=>{ if(t.isConnected){ t.dataset.arm=''; t.textContent= act==='suspend-person'?'利用を停止する':'利用を再開する'; } },5000); return; }
+    t.disabled=true; const now=new Date().toISOString();
+    const data = act==='suspend-person'
+      ? {status:'inactive', stoppedAt:now, stoppedBy:me.name, formerOwnerEmail:p.ownerEmail||'', formerCoachEmails:p.coachEmails||[], ownerEmail:'', coachEmails:[]}
+      : {status:'active', resumedAt:now, ownerEmail:p.formerOwnerEmail||'', coachEmails:p.formerCoachEmails||[]};
+    const ok=await saveSafe(()=>api.updatePerson(p.id,data), act==='suspend-person'?`${p.name}さんを利用停止にしました（データは残っています）`:`${p.name}さんの利用を再開しました`);
+    if(ok){ ui.draft=null; ui.draftKey=''; render(); } else t.disabled=false;
+    return;
+  }
   if(act==='delete-person'){
     if(!me.admin) return;
     const typed=(document.getElementById('delConfirm')?.value||'').trim();
@@ -827,7 +865,7 @@ document.addEventListener('click', async e=>{
     if(act==='add-goal'){ d.sheet.goals.push(blankGoal()); }
     else if(act==='archive-goal'){
       const g=d.sheet.goals[i]; const empty=!(g.text||g.metric||g.forWhat);
-      const used=allRecordsOf(p.id).some(r=>r.values && r.values[i]!==undefined && r.values[i]!==0 && r.values[i]!=='');
+      const used=allRecordsOf(p.id).some(r=>r.values && r.values[i]!==undefined && r.values[i]!==null && r.values[i]!=='');
       // 何も書いていない最後の目標は消す。それ以外は「外す」だけ（記録の位置を守る）
       if(empty && !used && i===d.sheet.goals.length-1 && d.sheet.goals.length>1) d.sheet.goals.pop(); else g.archived=true;
     } else if(act==='restore-goal'){ d.sheet.goals[i].archived=false; }
@@ -846,9 +884,10 @@ document.addEventListener('click', async e=>{
   if(act==='cancel-edit'){ ui.edit=null; render(); return; }
   if(act==='save-edit'){
     const r=allRecordsOf(p.id).find(x=>x.id===t.dataset.id); const e=ui.edit; if(!r||!e) return;
-    const after={date:e.date||r.date, values:e.values.map(v=>v===''?0:Number(v)), fact:e.fact.trim(), stuck:e.stuck.trim(), next:e.next.trim()};
+    if(isFuture(e.date)){ toast('今日より先の日付にはできません'); return; }
+    const after={date:e.date||r.date, values:e.values.map(toVal), fact:e.fact.trim(), stuck:e.stuck.trim(), next:e.next.trim()};
     const before={date:r.date||'', values:r.values||[], fact:r.fact||'', stuck:r.stuck||'', next:r.next||''};
-    if(JSON.stringify(after)===JSON.stringify({...before,values:after.values.map((_,i)=>Number(before.values[i]??0))})){ toast('変わったところがありません'); return; }
+    if(JSON.stringify(after)===JSON.stringify({...before,values:after.values.map((_,i)=>toVal(before.values[i]))})){ toast('変わったところがありません'); return; }
     t.disabled=true; const now=new Date().toISOString();
     const edits=[...(r.edits||[]), {at:now, by:me.name, why:(e.why||'').trim(), before}];
     const ok=await saveSafe(()=>api.updateRecord(p.id,r.id,{...after, edits, editedAt:now, editedBy:me.name}),'訂正しました（元の記録も残っています）');
