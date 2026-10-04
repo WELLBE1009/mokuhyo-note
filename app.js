@@ -168,36 +168,47 @@ async function firebaseApi(cfg){
 /* =========================================================
    データ層 2: デモ（この画面の中だけ。閉じると消える）
    ========================================================= */
-function demoApi(){
+function demoApi(pack){
   const id=()=> 'd'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
-  const push=()=>{ state.people=[...state.people]; state.ready=true; onData(); };
-  Object.assign(me,{email:'demo@example.com',name:'デモの管理者',admin:true,signedIn:true});
-  const s=blankSheet();
-  s.mission='わたしは、疲れて来たお客様が「来てよかった」と言って帰れるように、その時間を仲間と一緒につくる人でありたい。';
-  s.area='元気を届ける'; s.r22[1]='初回案内を、自分以外の人ができるようになるまで見届ける';
-  s.goals[0]={...blankGoal(),forWhat:'初めて来店されたお客様が迷わず安心して使い始められるようにするために',text:'3月までに、自分以外の2名が同じご案内をできる状態にする',metric:'その2名が単独でご案内した回数',unit:'回',start:'0',m1:'6',kind:'見届け',checks:[true,true,true,true]};
-  const pid='sample';
-  state.people=[{id:pid,name:'サンプル（記入例）',store:'栄店',role:'フロント',temp:'T2',coach:'コーチ名',grower:'成長担当名',periodStart:'2026-10-01',periodEnd:'2027-03-31',ownerEmail:'sample@example.com',coachEmails:['demo@example.com'],sheet:s,review:blankReview(),history:[],createdAt:'2026-10-01T09:00:00+09:00',sheetUpdatedAt:'2026-10-01T09:00:00+09:00'}];
-  state.records[pid]=[{id:id(),date:'2026-10-02',values:[1,0,0],fact:'初回案内のチェック表を使って、夜勤の◯◯さんが1組を単独でご案内できた',stuck:'日勤帯のメンバーに時間が取れていない',next:'来週は日勤の△△さんに同じ手順を渡す',check:['keep','',''],checkNote:'',createdAt:'2026-10-02T10:00:00+09:00',confirmedAt:null,confirmedBy:'',voiceDone:false,coachNote:''}];
-  setTimeout(()=>{ renderAccount(); push(); showNotice('デモ表示です。保存はされず、閉じると消えます。firebase-config.js を設定すると、本人とコーチで共有できるようになります。'); },0);
+  let all=[], viewers=[];
+  if(pack){
+    // デモページ：架空のデータ一式＋立場の切り替え
+    all=clone(pack.people); state.records=clone(pack.records||{}); state.terms=clone(pack.terms||{}); viewers=pack.viewers||[];
+  } else {
+    const s=blankSheet();
+    s.mission='わたしは、疲れて来たお客様が「来てよかった」と言って帰れるように、その時間を仲間と一緒につくる人でありたい。';
+    s.area='元気を届ける'; s.r22[1]='初回案内を、自分以外の人ができるようになるまで見届ける';
+    s.goals[0]={...blankGoal(),forWhat:'初めて来店されたお客様が迷わず安心して使い始められるようにするために',text:'3月までに、自分以外の2名が同じご案内をできる状態にする',metric:'その2名が単独でご案内した回数',unit:'回',start:'0',m1:'6',kind:'見届け',checks:[true,true,true,true]};
+    all=[{id:'sample',name:'サンプル（記入例）',store:'栄店',role:'フロント',temp:'T2',coach:'コーチ名',grower:'成長担当名',periodStart:'2026-10-01',periodEnd:'2027-03-31',ownerEmail:'sample@example.com',coachEmails:['demo@example.com'],sheet:s,review:blankReview(),history:[],createdAt:'2026-10-01T09:00:00+09:00',sheetUpdatedAt:'2026-10-01T09:00:00+09:00'}];
+    state.records.sample=[{id:id(),date:'2026-10-02',values:[1,0,0],fact:'初回案内のチェック表を使って、夜勤の◯◯さんが1組を単独でご案内できた',stuck:'日勤帯のメンバーに時間が取れていない',next:'来週は日勤の△△さんに同じ手順を渡す',check:['keep','',''],checkNote:'',createdAt:'2026-10-02T10:00:00+09:00',confirmedAt:null,confirmedBy:'',voiceDone:false,coachNote:''}];
+    viewers=[{key:'admin',email:'demo@example.com',name:'デモの管理者',admin:true}];
+  }
+  // 本番と同じく「見られる人のノートだけ」を見せる
+  const push=()=>{ state.people=all.filter(p=>me.admin || p.ownerEmail===me.email || (p.coachEmails||[]).includes(me.email)); state.ready=true; onData(); };
+  const setViewer=key=>{ const v=viewers.find(x=>x.key===key)||viewers[0]; Object.assign(me,{email:v.email,name:v.name,admin:!!v.admin,signedIn:true,viewerKey:v.key}); };
+  setViewer(pack? 'honnin' : 'admin');
+  setTimeout(()=>{ renderAccount(); push(); showNotice(pack? 'デモページです。登場する人と記録はすべて架空です。何を触っても保存されず、ページを開き直すと元に戻ります。右上で「本人／コーチ／管理者」の見え方を切り替えられます。' : 'デモ表示です。保存はされず、閉じると消えます。firebase-config.js を設定すると、本人とコーチで共有できるようになります。'); },0);
+  const upd=(pid,data)=>{ all=all.map(p=>p.id===pid?{...p,...data}:p); };
   return {
-    demo:true,
+    demo:true, viewers,
+    switchViewer(key){ setViewer(key); ui.pid=null; ui.dirty=false; ui.draft=null; ui.draftKey=''; ui.edit=null; renderAccount(); push(); window.scrollTo({top:0}); },
     watchRecords(){},
-    async closeTerm(pid,term,next){ (state.terms[pid] ||= []).push({id:id(),...term}); state.people=state.people.map(p=>p.id===pid?{...p,...next}:p); push(); },
-    async exportAll(){ return {exportedAt:new Date().toISOString(), project:'demo', people:state.people.map(p=>({...p, records:state.records[p.id]||[], terms:state.terms[p.id]||[]}))}; },
-    async logout(){ toast('デモ表示ではログアウトはありません'); },
-    async addPerson(data){ const n=id(); state.people.push({id:n,...data}); state.records[n]=[]; push(); return n; },
-    async updatePerson(pid,data){ state.people=state.people.map(p=>p.id===pid?{...p,...data}:p); push(); },
+    async closeTerm(pid,term,next){ (state.terms[pid] ||= []).push({id:id(),...term}); upd(pid,next); push(); },
+    async exportAll(){ return {exportedAt:new Date().toISOString(), project:'demo', people:all.map(p=>({...p, records:state.records[p.id]||[], terms:state.terms[p.id]||[]}))}; },
+    async logout(){ toast('デモページにはログアウトはありません。右上で立場を切り替えられます'); },
+    async addPerson(data){ const n=id(); all.push({id:n,...data}); state.records[n]=[]; push(); return n; },
+    async updatePerson(pid,data){ upd(pid,data); push(); },
     async addRecord(pid,data){ (state.records[pid] ||= []).push({id:id(),...data}); push(); },
     async updateRecord(pid,rid,data){ state.records[pid]=(state.records[pid]||[]).map(r=>r.id===rid?{...r,...data}:r); push(); },
     async deleteRecord(pid,rid){ state.records[pid]=(state.records[pid]||[]).filter(r=>r.id!==rid); push(); },
-    async deletePerson(pid){ state.people=state.people.filter(p=>p.id!==pid); delete state.records[pid]; push(); },
+    async deletePerson(pid){ all=all.filter(p=>p.id!==pid); delete state.records[pid]; delete state.terms[pid]; push(); },
   };
 }
 
 /* ---------- 起動 ---------- */
 async function boot(){
   const cfg=window.FIREBASE_CONFIG||{};
+  if(window.MOKUHYO_DEMO){ api=demoApi(window.MOKUHYO_DEMO); return; }  // demo.html：架空データのデモページ
   if(cfg.apiKey && cfg.projectId){
     try{ api=await firebaseApi(cfg); }
     catch(e){ console.error(e); $('#main').innerHTML=`<div class="card emptystate"><h2>Firebase に接続できませんでした</h2><p>firebase-config.js の内容と、インターネット接続を確認してください。</p></div>`; }
@@ -260,6 +271,10 @@ const authMsg = e => ({
 }[e?.code] ?? 'ログインできませんでした（'+(e?.code||'不明なエラー')+'）');
 
 function renderAccount(){
+  if(api?.demo && (api.viewers||[]).length>1){
+    $('#account').innerHTML = `<label class="small" style="display:flex;gap:6px;align-items:center">見る立場<select id="viewerSel" style="width:auto">${api.viewers.map(v=>`<option value="${esc(v.key)}" ${me.viewerKey===v.key?'selected':''}>${esc(v.label||v.name)}</option>`).join('')}</select></label>`;
+    return;
+  }
   $('#account').innerHTML = me.signedIn ? `${esc(me.name)}${me.admin?' <span class="role">管理者</span>':''} <button class="btn ghost" data-act="logout">ログアウト</button>` : '';
 }
 
@@ -747,6 +762,7 @@ document.addEventListener('input', e=>{
   }
 });
 
+document.addEventListener('change', e=>{ if(e.target.id==='viewerSel' && api?.switchViewer) api.switchViewer(e.target.value); });
 document.addEventListener('submit', async e=>{
   e.preventDefault();
   if(e.target.id==='loginForm'){

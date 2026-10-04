@@ -1,99 +1,166 @@
-// デモページ（demo.html）用の架空のデータ。人物・記録はすべて架空です。
-// 日付は「今日」からさかのぼって作るので、いつ開いても最近の記録に見えます。
+// デモページ（demo.html）用の架空のデータ。サンプル1〜3はすべて架空の人物・記録です。
+// 日付は「今日」からさかのぼって作るので、いつ開いても「数か月続けてきた」状態に見えます。
 (() => {
   const DAY = 864e5;
   const iso = n => { const d = new Date(Date.now() - n * DAY); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
   const at = n => new Date(Date.now() - n * DAY).toISOString();
-  const goal = (o) => Object.assign({forWhat:'',text:'',evidence:'',metric:'',unit:'',start:'',m1:'',y1:'',kind:'',checks:[true,true,true,true]}, o);
-  const sheet = (o) => Object.assign({m10:['','',''],m11:['','',''],mission:'',area:'',areaWhy:'',r21:['','',''],r22:['','',''],r23:'',goals:[],readChecks:[true,true,true,true]}, o);
-  const review = () => ({mid:[{done:'',stuck:'',decision:'',reason:''}],end:{a:'',b:'',c:''}});
-  let n = 0; const rid = () => 'demo-r' + (++n);
-  const rec = (daysAgo, values, fact, extra = {}) => Object.assign({
-    id: rid(), date: iso(daysAgo), values, fact, stuck: '', next: '', check: values.map(() => 'keep'), checkNote: '',
-    createdAt: at(daysAgo), confirmedAt: at(Math.max(daysAgo - 2, 0)), confirmedBy: 'コーチ 田中',
+  const slash = n => iso(n).replaceAll('-', '/');
+  const goal = o => Object.assign({forWhat:'',text:'',evidence:'',metric:'',unit:'',start:'0',m1:'',y1:'',kind:'',checks:[true,true,true,true]}, o);
+  const sheet = o => Object.assign({m10:['','',''],m11:['','',''],mission:'',area:'',areaWhy:'',r21:['','',''],r22:['','',''],r23:'',goals:[],readChecks:[true,true,true,true]}, o);
+  const blankMid = () => ({done:'',stuck:'',decision:'',reason:''});
+  let n = 0;
+  // 1件の週の記録。opt で詰まり・次の一歩・見直しの声・コーチのひとことなどを足す
+  const rec = (daysAgo, values, fact, opt = {}, coach = 'コーチA') => Object.assign({
+    id: 'demo-r' + (++n), date: iso(daysAgo), values, goalLabels: [], fact, stuck: '', next: '',
+    check: values.map(() => 'keep'), checkNote: '', createdAt: at(daysAgo),
+    confirmedAt: daysAgo > 4 ? at(daysAgo - 2) : null, confirmedBy: daysAgo > 4 ? coach : '',
     voiceDone: false, coachNote: '', coachNoteBy: ''
-  }, extra);
+  }, opt);
+
+  /* ---------------- サンプル1：栄店・フロント（約20週） ---------------- */
+  const s1g = [
+    goal({forWhat:'初めて来店されたお客様が迷わず安心して使い始められるようにするために', text:'期末までに、日勤と夜勤から1名ずつ、同じご案内を一人でできる状態にする', metric:'その2名が一人でご案内した回数', unit:'回', m1:'6', y1:'60', kind:'見届け'}),
+    goal({forWhat:'お客様の声がチーム全員に届くようにするために', text:'期末までに、良かったご案内の事例を毎週チームに共有し、試した人を増やす', metric:'良かった事例を共有した件数', unit:'件', m1:'4', y1:'30', kind:'拾い'})
+  ];
+  const s1 = [
+    // [何週前, 目標1, 目標2(なければundefined), 事実, その他]
+    [20, 0, undefined, '初回案内の順番を紙1枚にまとめ、日勤の新人に渡した', {stuck:'夜勤の新人と時間が合わない', next:'夜勤の締め前に15分もらう'}],
+    [19, 1, undefined, '日勤の新人が、わたしの横で1組を一人でご案内できた', {coachNote:'紙にしたのが効いていますね。夜勤の人にはどう渡しますか？', coachNoteBy:'コーチA'}],
+    [18, 1, undefined, '夜勤の新人と締め前に案内の練習をした', {next:'次は実際のお客様で試す'}],
+    [17, 2, undefined, '夜勤の新人が初めて一人でご案内。質問はサウナの温度だけだった', {check:['fix'], checkNote:'「2名」と決めたけど、日勤と夜勤で1名ずつと書かないと伝わらない', voiceDone:true}],
+    [16, 3, undefined, '日勤・夜勤の2名とも、それぞれ一人でご案内できた'],
+    [15, null, undefined, '体調不良で休み。案内の練習はできなかった', {stuck:'休んだ週の分を取り戻せていない'}],
+    [14, 3, undefined, '混雑した日に、日勤の新人が待ち時間の説明まで一人でできた', {stuck:'土日の混雑時は自分が案内に入ってしまう'}],
+    [13, 4, undefined, 'お客様から「説明がわかりやすかった」とアンケートに書かれた', {next:'この声をチームにも伝えたい'}],
+    [12, 4, 1, 'アンケートの声を朝礼で紹介した。目標2をここから数え始めた', {coachNote:'目標が1つ増えましたね。無理のない数で続けてください', coachNoteBy:'コーチA'}],
+    [11, 5, 1, '夜勤の新人が、案内のときのひと言を自分で考えて足していた'],
+    [10, 4, 2, '良かった案内の事例を2件、グループのトークに共有した', {next:'共有した事例を誰が試したか聞く'}],
+    [9, 6, 1, '共有した「タオルの渡し方」を、別のスタッフが試してくれた'],
+    [8, 5, 2, '日勤の新人が、別の新人に案内を教えていた', {stuck:'教え方がばらばらになってきた'}],
+    [7, 6, 1, '案内のひと言を3つにしぼった紙をつくり直した'],
+    [6, 5, 0, '館内の改装で案内の順番が変わり、紙を直した', {stuck:'共有する時間がとれなかった'}],
+    [5, 7, 2, '2名とも、改装後の順番で一人でご案内できた'],
+    [4, 6, 1, '夜勤の新人が、混雑時の案内を自分の判断で回した'],
+    [3, 7, 2, '事例共有を見た今池店の人から、紙をもらえないかと連絡があった', {next:'今池店に紙を送る'}],
+    [2, 6, 1, '紙を今池店に送った。直す担当を夜勤の新人にお願いした', {stuck:'紙が古くなったとき、直す流れが決まっていない'}],
+    [0, 7, 2, '自分は横で見るだけの日をつくった。2名だけで初回案内をすべて回せた', {next:'来月から、自分は案内の当番から外れてみる'}]
+  ];
+  const s1rec = s1.map(([w, a, b, fact, opt]) => rec(w * 7 + 1, b === undefined ? [a] : [a, b], fact, opt || {}));
+
+  /* ---------------- サンプル2：今池店・清掃設備（約16週・最近止まっている） ---------------- */
+  const s2 = [
+    [17, 1, 0, '水風呂の前の床が濡れていて、お客様が滑りかけた。記録して伝えた', {stuck:'どこに書けばいいか迷った'}],
+    [16, 2, 0, '脱衣所の段差でつまずいた方がいた。注意の表示を出した'],
+    [15, 1, 1, '水風呂前にマットを敷いてから、滑りかけた人はいない', {coachNote:'「起きなくなった」を見届けましたね。マットは誰が干していますか？', coachNoteBy:'コーチA'}],
+    [14, 0, 0, 'ヒヤリとした場面はなかった'],
+    [13, 3, 0, 'サウナ室の砂時計が割れかけていた。外して報告した'],
+    [12, 1, 1, '段差の表示を出してから、つまずいた人はいない'],
+    [11, null, null, '有給休暇で記録なし'],
+    [10, 2, 0, '洗い場のシャワーが熱湯になることがあった。設備業者に連絡した', {stuck:'業者が来るまで1週間かかる'}],
+    [9, 1, 1, 'シャワーを直してもらい、その後は熱湯になっていない'],
+    [8, 2, 0, '夜勤の人から、休憩室の床の濡れについて聞いた', {next:'夜勤の人にも記録してもらえるか相談する'}],
+    [7, 1, 0, '夜勤の人がヒヤリを1件記録してくれた'],
+    [6, 2, 1, '外気浴スペースの椅子のぐらつきを直した'],
+    [5, 1, 0, '記録の紙が見当たらない日があった', {check:['change','keep'], checkNote:'件数を数えるより、夜勤の人が記録できるようにするほうが大事な気がする'}],
+    [2, 2, 1, '床の濡れを見つけたら、担当外でも拭くようにチームで決めた']
+  ];
+  const s2rec = s2.map(([w, a, b, fact, opt]) => rec(w * 7 + 12, [a, b], fact, opt || {}));
+
+  /* ---------------- サンプル3：福岡店・ウィスキング（前の期を締めて、今の期は約10週） ---------------- */
+  const s3old = [
+    rec(260, [1], '前の期：新人に施術の順番を見せた', {}, 'コーチB'),
+    rec(230, [2], '前の期：施術の手順書の下書きをつくった', {}, 'コーチB'),
+    rec(200, [3], '前の期：新人が仕上げの工程を一人でできた', {}, 'コーチB'),
+    rec(170, [4], '前の期：手順書を見ながら、新人2名が練習を始めた', {}, 'コーチB')
+  ];
+  const s3 = [
+    [10, 1, '新人のAさんが、最初のお客様を一人で担当した'],
+    [9, 2, 'Aさんが2回担当。お客様アンケートで「また受けたい」が1件'],
+    [8, 3, 'Bさんが初めて一人で担当。時間配分が押した', {stuck:'時間配分を教える方法がわからない'}],
+    [7, 2, 'Bさんに砂時計を渡し、工程ごとの目安を一緒に決めた', {coachNote:'砂時計、良い工夫ですね。Bさん自身はどう感じていますか？', coachNoteBy:'コーチB'}],
+    [6, 4, 'AさんとBさんで、平日午後の施術を回せた'],
+    [5, 5, 'Aさんが、Bさんに仕上げのコツを教えていた'],
+    [4, 4, '週末の予約が重なり、自分が施術に入った', {stuck:'週末は人が足りない'}],
+    [3, 6, '週末もAさんとBさんで半分を担当できた'],
+    [2, 7, 'お客様アンケートで「どの人に当たっても同じように気持ちいい」と書かれた'],
+    [1, 6, '手順書を新人2名が自分たちで直し始めた', {next:'手順書の持ち主をAさんにする'}]
+  ];
+  const s3rec = s3.map(([w, a, fact, opt]) => rec(w * 7 + 3, [a], fact, opt || {}, 'コーチB'));
 
   window.MOKUHYO_DEMO = {
     viewers: [
-      {key:'honnin', label:'本人として見る（青木さくら）', email:'aoki@demo.example', name:'青木さくら', admin:false},
-      {key:'coach',  label:'コーチとして見る（田中）',     email:'tanaka@demo.example', name:'コーチ 田中', admin:false},
-      {key:'admin',  label:'管理者として見る',             email:'admin@demo.example', name:'デモの管理者', admin:true}
+      {key:'honnin', label:'本人として見る（サンプル1）', email:'sample1@demo.example', name:'サンプル1', admin:false},
+      {key:'coach',  label:'コーチとして見る（コーチA）', email:'coach-a@demo.example', name:'コーチA', admin:false},
+      {key:'admin',  label:'管理者として見る',            email:'admin@demo.example', name:'デモの管理者', admin:true}
     ],
     people: [
       {
-        id:'demo-aoki', name:'青木さくら', store:'栄店', role:'フロント', temp:'T2', coach:'田中', grower:'森',
-        periodStart: iso(56), periodEnd: iso(-126), ownerEmail:'aoki@demo.example', coachEmails:['tanaka@demo.example'],
+        id:'demo-s1', name:'サンプル1', store:'栄店', role:'フロント', temp:'T2', coach:'コーチA', grower:'成長担当A',
+        periodStart: iso(142), periodEnd: iso(-40), ownerEmail:'sample1@demo.example', coachEmails:['coach-a@demo.example'],
         sheet: sheet({
           m10:['初めてのお客様に館内を案内したとき、帰りに「わかりやすかった、また来ます」と言われた','お客様の表情がやわらいだ。後輩もその案内を真似し始めた','自分のやり方が、人を通して広がったと感じたから'],
+          m11:['初めての人の不安をなくすこと','自分がいない時間帯でも、同じ案内が受けられる状態','案内の型を任されたい'],
           mission:'わたしは、初めて来たお客様が迷わず安心してととのえるように、案内の型を仲間に手渡す人でありたい。',
           area:'元気を届ける', areaWhy:'目の前の一人のお客様の体験が、次の来店につながると思うから',
           r21:['フロントの案内の順番','自分のシフトでの初回案内','混雑時の待ち時間の説明'],
-          r22:['','初回案内を、自分以外の人が一人でできるようになるまで見届ける','困っている新人に、自分から声をかける'],
-          goals:[goal({forWhat:'初めて来店されたお客様が迷わず安心して使い始められるようにするために',text:'3か月後までに、自分以外の2名が同じご案内を一人でできる状態にする',metric:'その2名が一人でご案内した回数',unit:'回',start:'0',m1:'6',kind:'見届け'})]
+          r22:['案内の紙の中身','初回案内を、自分以外の人が一人でできるようになるまで見届ける','困っている新人に、自分から声をかける'],
+          r23:'初めて来たお客様が安心してととのえるために、わたしは新しく、初回案内を他の人が一人でできるまで見届け、困っている新人を拾いにいく。',
+          goals: s1g
         }),
-        review: review(), history:[{at:at(56), by:'青木さくら', note:'はじめて目標を書いた', goals:[{forWhat:'初めて来店されたお客様が迷わず安心して使い始められるようにするために', text:'3か月後までに、自分以外の2名が同じご案内を一人でできる状態にする', metric:'その2名が一人でご案内した回数'}]}],
-        createdAt: at(56), sheetUpdatedAt: at(40)
+        review: {mid:[
+          {done:'日勤・夜勤の2名とも一人でご案内できるようになった。月の合計は6〜9回まで増えた', stuck:'土日の混雑時は自分が案内に入ってしまう', decision:'keep', reason:''},
+          {done:'良かった事例の共有を始め、他の人が試してくれるようになった', stuck:'忙しい週は共有が止まる', decision:'keep', reason:''}
+        ], end:{a:'',b:'',c:''}},
+        history: [
+          {at:at(141), by:'サンプル1', note:'はじめて目標を書いた', goals:[{forWhat:s1g[0].forWhat, text:'期末までに、自分以外の2名が同じご案内を一人でできる状態にする', metric:s1g[0].metric}]},
+          {at:at(118), by:'サンプル1', note:'言葉を直した：「2名」を「日勤と夜勤から1名ずつ」に', goals:[{forWhat:s1g[0].forWhat, text:s1g[0].text, metric:s1g[0].metric}]},
+          {at:at(84), by:'サンプル1', note:'目標2を追加した（お客様の声の共有）', goals:s1g.map(g=>({forWhat:g.forWhat, text:g.text, metric:g.metric}))}
+        ],
+        createdAt: at(142), sheetUpdatedAt: at(20)
       },
       {
-        id:'demo-ishii', name:'石井 健', store:'今池店', role:'清掃・設備', temp:'T1', coach:'田中', grower:'',
-        periodStart: iso(30), periodEnd: iso(-150), ownerEmail:'ishii@demo.example', coachEmails:['tanaka@demo.example'],
+        id:'demo-s2', name:'サンプル2', store:'今池店', role:'清掃・設備', temp:'T1', coach:'コーチA', grower:'',
+        periodStart: iso(125), periodEnd: iso(-57), ownerEmail:'sample2@demo.example', coachEmails:['coach-a@demo.example'],
         sheet: sheet({
+          m10:['床の濡れに気づいて拭いたあと、お客様に「ありがとう」と言われた','お客様が安心して歩いていた','気づいたことが、誰かのけがを防げたから'],
           mission:'わたしは、お客様がけがなく安心して過ごせるように、ヒヤリとした場面を見逃さない人でありたい。',
-          area:'森を育てる', r22:['','ヒヤリとした場面の記録を、再発しなくなるまで見届ける','床の濡れに気づいたら、担当外でも拾いにいく'],
+          area:'森を育てる', areaWhy:'自分がいない時間でも、安全が続く形にしたいから',
+          r21:['清掃の順番','自分のシフトの館内の点検','設備の不具合の報告'],
+          r22:['','ヒヤリとした場面の記録を、再発しなくなるまで見届ける','床の濡れに気づいたら、担当外でも拾いにいく'],
           goals:[
-            goal({forWhat:'安全に安心して入っていただくために',text:'期末までに、ヒヤリとした場面を記録し、同じことが起きない形に変える',metric:'ヒヤリとした場面を記録した件数',unit:'件',start:'0',m1:'4',kind:'拾い'}),
-            goal({forWhat:'同じ場所で同じことが起きないようにするために',text:'記録した場面のうち、対策をして再発しなくなったものを増やす',metric:'再発しなくなった件数',unit:'件',start:'0',m1:'1',kind:'見届け'})
+            goal({forWhat:'安全に安心して入っていただくために', text:'期末までに、ヒヤリとした場面を記録し、同じことが起きない形に変える', metric:'ヒヤリとした場面を記録した件数', unit:'件', m1:'4', kind:'拾い'}),
+            goal({forWhat:'同じ場所で同じことが起きないようにするために', text:'記録した場面のうち、対策をして再発しなくなったものを増やす', metric:'再発しなくなった件数', unit:'件', m1:'1', kind:'見届け'})
           ]
         }),
-        review: review(), history:[], createdAt: at(30), sheetUpdatedAt: at(30)
+        review: {mid:[blankMid(), blankMid()], end:{a:'',b:'',c:''}},
+        history: [{at:at(124), by:'サンプル2', note:'はじめて目標を書いた', goals:[]}],
+        createdAt: at(125), sheetUpdatedAt: at(124)
       },
       {
-        id:'demo-ueno', name:'上野真理', store:'福岡店', role:'ウィスキング', temp:'T3', coach:'森', grower:'',
-        periodStart: iso(35), periodEnd: iso(-145), ownerEmail:'ueno@demo.example', coachEmails:['mori@demo.example'],
-        termStartAt: at(36),
+        id:'demo-s3', name:'サンプル3', store:'福岡店', role:'ウィスキング', temp:'T3', coach:'コーチB', grower:'',
+        periodStart: iso(75), periodEnd: iso(-290), ownerEmail:'sample3@demo.example', coachEmails:['coach-b@demo.example'],
+        termStartAt: at(76),
         sheet: sheet({
           mission:'わたしは、ウィスキングを受けた人が「からだが軽くなった」と帰れるように、施術の質を仲間と一緒に高める人でありたい。',
-          area:'森を育てる', r22:['','新人2名の施術を、一人で担当できるまで見届ける','予約の重なりに先に気づいて調整する'],
-          goals:[goal({forWhat:'どの時間帯でも同じ質の施術を届けるために',text:'期末までに、新人2名が一人で施術を担当できる状態にする',metric:'新人が一人で担当した施術の回数',unit:'回',start:'0',m1:'8',kind:'見届け'})]
+          area:'森を育てる', areaWhy:'自分がいなくても、同じ質の施術が続く形にしたいから',
+          r21:['施術の手順','新人の練習の順番','予約の組み方'],
+          r22:['','新人2名の施術を、一人で担当できるまで見届ける','予約の重なりに先に気づいて調整する'],
+          goals:[goal({forWhat:'どの時間帯でも同じ質の施術を届けるために', text:'期末までに、新人2名が一人で施術を担当できる状態にする', metric:'新人が一人で担当した施術の回数', unit:'回', m1:'8', y1:'80', kind:'見届け'})]
         }),
-        review: review(), history:[], createdAt: at(220), sheetUpdatedAt: at(35)
+        review: {mid:[blankMid()], end:{a:'',b:'',c:''}},
+        history: [{at:at(75), by:'サンプル3', note:'新しい期の目標を書いた', goals:[]}],
+        createdAt: at(300), sheetUpdatedAt: at(70)
       }
     ],
-    records: {
-      'demo-aoki': [
-        rec(52, [0], '新人の◯◯さんに、初回案内の順番を紙に書いて渡した', {stuck:'日勤帯の人と時間が合わない', next:'来週、夜勤の締め前に一緒に1組ご案内する'}),
-        rec(45, [1], '◯◯さんが、わたしの横で1組を一人でご案内できた', {next:'次は△△さんにも同じ紙を渡す', coachNote:'紙に書いたのが効いていますね。△△さんにはどう渡しますか？', coachNoteBy:'コーチ 田中'}),
-        rec(38, [2], '◯◯さんが2組を一人でご案内。質問はサウナの温度だけだった', {check:['fix'], checkNote:'「2名」と決めたけど、日勤には新人が1人しかいない', voiceDone:true}),
-        rec(31, [null], '体調不良で2日休み。案内の練習はできなかった', {stuck:'休んだ分、練習の時間が取れていない'}),
-        rec(24, [3], '△△さんが初めて一人でご案内。お客様から「わかりやすい」と言われていた', {next:'案内のときに使うひと言を3つにしぼって紙に足す'}),
-        rec(17, [2], '混雑した日に、◯◯さんが待ち時間の説明まで一人でできた', {stuck:'土日の混雑時は自分が案内に入ってしまう'}),
-        rec(10, [4], '◯◯さんと△△さんで、その日の初回案内をすべて回せた', {next:'自分は横で見るだけにする日をつくる', confirmedAt:null, confirmedBy:''}),
-        rec(3,  [3], '案内のひと言を3つにしぼった紙を、フロントの全員に配った', {stuck:'紙が古くなったとき、誰が直すか決まっていない', next:'直す人を◯◯さんにお願いしてみる', confirmedAt:null, confirmedBy:''})
-      ],
-      'demo-ishii': [
-        rec(28, [1, 0], '水風呂の前の床が濡れていて、お客様が滑りかけた。記録して店長に伝えた', {stuck:'どこに書けばいいか迷った'}),
-        rec(21, [2, 0], '脱衣所の段差でつまずいた方がいた。注意の表示を出した'),
-        rec(14, [1, 1], '水風呂前にマットを敷いてから、滑りかけた人はいない', {coachNote:'「起きなくなった」を見届けましたね。マットは誰が干していますか？', coachNoteBy:'コーチ 田中'})
-      ],
-      'demo-ueno': [
-        rec(250, [2], '前の期：新人に施術の順番を見せた', {confirmedBy:'コーチ 森'}),
-        rec(200, [5], '前の期：新人が仕上げの工程を一人でできた', {confirmedBy:'コーチ 森'}),
-        rec(33, [1], '新人の◯◯さんが、最初のお客様を一人で担当した', {confirmedBy:'コーチ 森'}),
-        rec(26, [3], '◯◯さんが3回担当。お客様アンケートで「また受けたい」が2件', {confirmedBy:'コーチ 森'}),
-        rec(19, [2], '△△さんが初めて一人で担当。時間配分が押した', {stuck:'時間配分を教える方法がわからない', confirmedBy:'コーチ 森'}),
-        rec(12, [4], '△△さんに砂時計を渡し、工程ごとの目安を一緒に決めた', {confirmedBy:'コーチ 森'}),
-        rec(5,  [5], '◯◯さんと△△さんで、平日の施術をすべて回せた', {confirmedAt:null, confirmedBy:''})
-      ]
-    },
+    records: { 'demo-s1': s1rec, 'demo-s2': s2rec, 'demo-s3': [...s3old, ...s3rec] },
     terms: {
-      'demo-ueno': [{
-        id:'demo-t1', label:`${iso(220).replaceAll('-','/')} 〜 ${iso(37).replaceAll('-','/')}`, periodStart: iso(220), periodEnd: iso(37), startAt: null, closedAt: at(36), closedBy:'上野真理',
-        name:'上野真理', store:'福岡店', role:'ウィスキング', temp:'T2', coach:'森', grower:'',
+      'demo-s3': [{
+        id:'demo-t1', label:`${slash(290)} 〜 ${slash(77)}`, periodStart: iso(290), periodEnd: iso(77), startAt: null, closedAt: at(76), closedBy:'サンプル3',
+        name:'サンプル3', store:'福岡店', role:'ウィスキング', temp:'T2', coach:'コーチB', grower:'',
         sheet: sheet({mission:'わたしは、ウィスキングを受けた人が「からだが軽くなった」と帰れる時間をつくる人でありたい。',
-          goals:[goal({forWhat:'施術の質をそろえるために',text:'期末までに、施術の手順書をつくり、新人が仕上げの工程を一人でできる状態にする',metric:'新人が仕上げを一人でできた回数',unit:'回',start:'0',m1:'4'})]}),
-        review: {mid:[{done:'',stuck:'',decision:'',reason:''}], end:{a:'自分が施術するだけでなく、新人の仕上げまで見届けるようになった', b:'施術の手順書。新人はこれを見て練習している', c:''}},
-        history: [], recordCount: 2, totals: [7]
+          goals:[goal({forWhat:'施術の質をそろえるために', text:'期末までに施術の手順書をつくり、新人が仕上げの工程を一人でできる状態にする', metric:'新人が仕上げを一人でできた回数', unit:'回', m1:'4'})]}),
+        review: {mid:[blankMid()], end:{a:'自分が施術するだけでなく、新人の仕上げまで見届けるようになった', b:'施術の手順書。新人はこれを見て練習している', c:''}},
+        history: [{at:at(285), note:'はじめて目標を書いた', goals:[]}], recordCount: 4, totals: [10]
       }]
     }
   };
