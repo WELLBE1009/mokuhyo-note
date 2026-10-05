@@ -187,7 +187,7 @@ function demoApi(pack){
   const push=()=>{ state.people=all.filter(p=>me.admin || p.ownerEmail===me.email || (p.coachEmails||[]).includes(me.email)); state.ready=true; onData(); };
   const setViewer=key=>{ const v=viewers.find(x=>x.key===key)||viewers[0]; Object.assign(me,{email:v.email,name:v.name,admin:!!v.admin,signedIn:true,viewerKey:v.key}); };
   setViewer(pack? 'honnin' : 'admin');
-  setTimeout(()=>{ renderAccount(); push(); showNotice(pack? 'デモページです。登場する人と記録はすべて架空です。何を触っても保存されず、ページを開き直すと元に戻ります。右上で「本人／コーチ／管理者」の見え方を切り替えられます。' : 'デモ表示です。保存はされず、閉じると消えます。firebase-config.js を設定すると、本人とコーチで共有できるようになります。'); },0);
+  setTimeout(()=>{ renderAccount(); push(); showNotice(pack? 'デモページです。登場する人と記録はすべて架空です。何を触っても保存されず、ページを開き直すと元に戻ります。' : 'デモ表示です。保存はされず、閉じると消えます。firebase-config.js を設定すると、本人とコーチで共有できるようになります。'); },0);
   const upd=(pid,data)=>{ all=all.map(p=>p.id===pid?{...p,...data}:p); };
   return {
     demo:true, viewers,
@@ -271,9 +271,13 @@ const authMsg = e => ({
 }[e?.code] ?? 'ログインできませんでした（'+(e?.code||'不明なエラー')+'）');
 
 function renderAccount(){
-  if(api?.demo && (api.viewers||[]).length>1){
-    $('#account').innerHTML = `<label class="small" style="display:flex;gap:6px;align-items:center">見る立場<select id="viewerSel" style="width:auto">${api.viewers.map(v=>`<option value="${esc(v.key)}" ${me.viewerKey===v.key?'selected':''}>${esc(v.label||v.name)}</option>`).join('')}</select></label>`;
-    return;
+  // デモページだけ：本番と同じ右上の表示とは別に、色を変えた帯で「デモ用の切り替え」を出す
+  const bar=document.getElementById('demoBar');
+  if(bar){
+    if(api?.demo && (api.viewers||[]).length>1){
+      bar.hidden=false;
+      bar.innerHTML = `<b>デモ用の切り替え</b><span class="small">本番にはない機能です。本番では、ログインしたメールアドレスで立場が決まり、自分で切り替えることはできません。</span><label class="small" style="display:flex;gap:6px;align-items:center;margin-left:auto">見る立場<select id="viewerSel" style="width:auto">${api.viewers.map(v=>`<option value="${esc(v.key)}" ${me.viewerKey===v.key?'selected':''}>${esc(v.label||v.name)}</option>`).join('')}</select></label>`;
+    } else bar.hidden=true;
   }
   $('#account').innerHTML = me.signedIn ? `${esc(me.name)}${me.admin?' <span class="role">管理者</span>':''} <button class="btn ghost" data-act="logout">ログアウト</button>` : '';
 }

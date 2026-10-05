@@ -161,3 +161,7 @@ details.sec>.in{padding:0 20px 20px;display:flex;flex-direction:column;gap:14px}
 .coachnote b{color:var(--forest);font-weight:700;margin-right:6px;font-size:.78rem}
 .inline-form{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
 .inline-form textarea{flex:1;min-width:200px;min-height:44px}
+
+/* ---- デモページ専用の帯（本番では出ない） ---- */
+.demobar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;border:2px dashed var(--ember);background:var(--ember-soft);color:var(--ink);border-radius:var(--r);padding:10px 14px}
+.demobar b{color:var(--ember)}
